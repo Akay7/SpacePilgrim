@@ -1,9 +1,13 @@
 RiceRocksGame:
 
 
-<Asteroid@Widget>:
-    Image:
-        source: "images/asteroid_blue.png"
+<Asteroid>:
+    size: 90, 90
+    canvas:
+        Ellipse:
+            source: "images/asteroid_blue.png"
+            pos: self.pos
+            size: self.size
 
 <Shot>
     size: 10, 10
@@ -40,6 +44,3 @@ RiceRocksGame:
     Spaceship:
         id: spaceship
         center: self.parent.center
-#    Shot
-#    Asteroid
-

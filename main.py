@@ -1,4 +1,5 @@
 from functools import partial
+from random import randint
 
 from kivy.core.window import Window
 from kivy.app import App
@@ -11,9 +12,24 @@ from kivy.vector import Vector
 from kivy.clock import Clock
 
 
+class Asteroid(Widget):
+    speed = NumericProperty(4)
+    angle = NumericProperty(0)
+
+    def update(self, dt):
+        for i in [0, 1]:
+            if self.pos[i] < 0:
+                self.pos[i] = Window.size[i]
+            elif self.pos[i] > Window.size[i]:
+                self.pos[i] = 0
+
+        self.pos = Vector(self.speed, 0).rotate(self.angle) + self.pos
+
+
 class Shot(Widget):
     lifetime = NumericProperty(1)
     speed = NumericProperty(4)
+    angle = NumericProperty(0)
 
     def update(self, dt):
         for i in [0, 1]:
@@ -80,7 +96,7 @@ class Spaceship(Widget):
 class RiceRocksGame(Widget):
     spaceship = ObjectProperty(None)
     shots = ListProperty()
-    shot = ObjectProperty(None)
+    asteroids = ListProperty()
 
     def __init__(self, **kwargs):
         super(RiceRocksGame, self).__init__(**kwargs)
@@ -98,11 +114,6 @@ class RiceRocksGame(Widget):
         self._keyboard.unbind(on_key_down=self._on_keyboard_down)
         self._keyboard.unbind(on_key_up=self._on_keyboard_up)
         self._keyboard = None
-
-    def remove_shot(self, shot, *largs):
-        self.remove_widget(shot)
-        if shot in self.shots:
-            self.shots.remove(shot)
 
     def _on_keyboard_down(self, keyboard, keycode, text, modifiers):
         if keycode[1] == "up":
@@ -133,14 +144,33 @@ class RiceRocksGame(Widget):
     def update(self, dt):
         self.spaceship.update(dt)
         if self.shots:
-            print len([shot.update(dt) for shot in self.shots])
-            # self.shot.update()
+            [shot.update(dt) for shot in self.shots]
+
+        if self.asteroids:
+            [asteroid.update(dt) for asteroid in self.asteroids]
+
+    def remove_shot(self, shot, *largs):
+        self.remove_widget(shot)
+        if shot in self.shots:
+            self.shots.remove(shot)
+
+    def generate_asteroid(self, dt):
+        position = Vector(randint(0, Window.size[0]), randint(0, Window.size[1]))
+        if position.distance(self.spaceship.pos) > 50 and len(self.asteroids) < 3:
+            asteroid = Asteroid()
+            asteroid.pos = position
+            asteroid.angle = randint(0, 360)
+            self.add_widget(asteroid)
+            self.asteroids.append(asteroid)
+
+
 
 
 class RiceRocksApp(App):
     def build(self):
         game = RiceRocksGame()
         Clock.schedule_interval(game.update, 1.0/60.0)
+        Clock.schedule_interval(game.generate_asteroid, 2)
         return game
 
     def on_pause(self):
