@@ -5,9 +5,18 @@ RiceRocksGame:
     Image:
         source: "images/asteroid_blue.png"
 
+<Shot>
+    size: 10, 10
+    canvas:
+        Ellipse:
+            source: "images/shot1.png"
+            pos: self.pos
+            size: self.size
+
 <Spaceship>:
     ship_stop: "images/ship_stop.png"
     ship_fly: "images/ship_fly.png"
+    size: 90, 90
 
     canvas.before:
         PushMatrix
@@ -22,7 +31,7 @@ RiceRocksGame:
             source:
                 self.ship_fly if self.thrust else self.ship_stop
             pos: self.pos
-            size: 90,90
+            size: self.size
 
 
 
@@ -31,5 +40,6 @@ RiceRocksGame:
     Spaceship:
         id: spaceship
         center: self.parent.center
+#    Shot
 #    Asteroid
 
