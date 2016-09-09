@@ -44,3 +44,7 @@ RiceRocksGame:
     Spaceship:
         id: spaceship
         center: self.parent.center
+    Label:
+        pos: root.size[0] - 200, root.size[1] - 100
+        text: "Lives {}".format(root.spaceship.lives)
+        font_size: "30dp"

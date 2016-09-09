@@ -42,6 +42,7 @@ class Shot(Widget):
 
 
 class Spaceship(Widget):
+    lives = NumericProperty(3)
     speed = NumericProperty(0)
     thrust = BooleanProperty(False)
     angle = NumericProperty(0)
@@ -78,16 +79,9 @@ class Spaceship(Widget):
 
     def shot(self):
         shot = Shot()
-
         shot.pos = (
             Vector(*self.size)/2 - Vector(*shot.size)/2 +
             self.pos + Vector(self.size[0] / 2, 0).rotate(self.angle)
-        )
-        shot.pos = (
-            Vector(
-                self.size[0]/2 - shot.size[0]/2,
-                self.size[1]/2 - shot.size[1]/2
-            ) + self.pos + Vector(self.size[0] / 2, 0).rotate(self.angle)
         )
         shot.angle = self.angle
         return shot
@@ -144,10 +138,19 @@ class RiceRocksGame(Widget):
     def update(self, dt):
         self.spaceship.update(dt)
         if self.shots:
-            [shot.update(dt) for shot in self.shots]
+            for shot in self.shots:
+                shot.update(dt)
 
         if self.asteroids:
-            [asteroid.update(dt) for asteroid in self.asteroids]
+            for asteroid in self.asteroids:
+                asteroid.update(dt)
+                if asteroid.collide_widget(self.spaceship):
+                    self.remove_asteroid(asteroid)
+                    self.spaceship.lives -= 1
+
+    def remove_asteroid(self, asteroid):
+        self.remove_widget(asteroid)
+        self.asteroids.remove(asteroid)
 
     def remove_shot(self, shot, *largs):
         self.remove_widget(shot)
@@ -162,8 +165,6 @@ class RiceRocksGame(Widget):
             asteroid.angle = randint(0, 360)
             self.add_widget(asteroid)
             self.asteroids.append(asteroid)
-
-
 
 
 class RiceRocksApp(App):
