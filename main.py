@@ -4,6 +4,7 @@ from random import randint
 from kivy.core.window import Window
 from kivy.app import App
 from kivy.uix.widget import Widget
+from kivy.uix.button import Button
 from kivy.properties import (
     ObjectProperty, NumericProperty, BooleanProperty, StringProperty,
     ListProperty,
@@ -42,7 +43,7 @@ class Shot(Widget):
 
 
 class Spaceship(Widget):
-    lives = NumericProperty(3)
+    lives = NumericProperty(3 )
     speed = NumericProperty(0)
     thrust = BooleanProperty(False)
     angle = NumericProperty(0)
@@ -87,8 +88,13 @@ class Spaceship(Widget):
         return shot
 
 
+class Splash(Button):
+    pass
+
+
 class RiceRocksGame(Widget):
     spaceship = ObjectProperty(None)
+    splash = ObjectProperty(None)
     shots = ListProperty()
     asteroids = ListProperty()
     points = NumericProperty(0)
@@ -103,6 +109,9 @@ class RiceRocksGame(Widget):
             pass
         self._keyboard.bind(on_key_down=self._on_keyboard_down)
         self._keyboard.bind(on_key_up=self._on_keyboard_up)
+
+        self.frame_schedule = Clock.schedule_interval(self.update, 1.0/60.0)
+        self.asteroid_schedule = Clock.schedule_interval(self.generate_asteroid, 2)
 
     def _keyboard_closed(self):
         print('My keyboard have been closed!')
@@ -136,6 +145,24 @@ class RiceRocksGame(Widget):
         if keycode[1] in ["right", "left"]:
             self.spaceship.turn()
 
+    def game_start(self):
+        # reset game status
+        [self.remove_shot(shot) for shot in self.shots]
+        [self.remove_asteroid(asteroid) for asteroid in self.asteroids]
+        self.spaceship.lives = 3
+        self.points = 0
+
+        # start schedule
+        self.frame_schedule = Clock.schedule_interval(self.update, 1.0/60.0)
+        self.asteroid_schedule = Clock.schedule_interval(self.generate_asteroid, 2)
+        self.remove_widget(self.splash)
+
+    def game_stop(self):
+        self.frame_schedule.cancel()
+        self.asteroid_schedule.cancel()
+        self.splash = Splash()
+        self.add_widget(self.splash)
+
     def update(self, dt):
         self.spaceship.update(dt)
         [shot.update(dt) for shot in self.shots]
@@ -145,6 +172,8 @@ class RiceRocksGame(Widget):
             if asteroid.collide_widget(self.spaceship):
                 self.remove_asteroid(asteroid)
                 self.spaceship.lives -= 1
+                if self.spaceship.lives == 0:
+                    self.game_stop()
             for shot in self.shots:
                 if asteroid.collide_widget(shot):
                     self.remove_asteroid(asteroid)
@@ -174,8 +203,7 @@ class RiceRocksGame(Widget):
 class RiceRocksApp(App):
     def build(self):
         game = RiceRocksGame()
-        Clock.schedule_interval(game.update, 1.0/60.0)
-        Clock.schedule_interval(game.generate_asteroid, 2)
+        game.game_stop()
         return game
 
     def on_pause(self):

@@ -1,6 +1,5 @@
 RiceRocksGame:
 
-
 <Asteroid>:
     size: 90, 90
     canvas:
@@ -37,6 +36,12 @@ RiceRocksGame:
             pos: self.pos
             size: self.size
 
+<Splash>:
+    background_normal: "images/splash.png"
+    background_down: "images/splash.png"
+    on_press: self.parent.game_start()
+    size: 400, 300
+    pos: root.size[0] / 2, root.size[1] / 2
 
 
 <RiceRocksGame>:
