@@ -91,6 +91,7 @@ class RiceRocksGame(Widget):
     spaceship = ObjectProperty(None)
     shots = ListProperty()
     asteroids = ListProperty()
+    points = NumericProperty(0)
 
     def __init__(self, **kwargs):
         super(RiceRocksGame, self).__init__(**kwargs)
@@ -137,20 +138,23 @@ class RiceRocksGame(Widget):
 
     def update(self, dt):
         self.spaceship.update(dt)
-        if self.shots:
-            for shot in self.shots:
-                shot.update(dt)
+        [shot.update(dt) for shot in self.shots]
+        [asteroid.update(dt) for asteroid in self.asteroids]
 
-        if self.asteroids:
-            for asteroid in self.asteroids:
-                asteroid.update(dt)
-                if asteroid.collide_widget(self.spaceship):
+        for asteroid in self.asteroids:
+            if asteroid.collide_widget(self.spaceship):
+                self.remove_asteroid(asteroid)
+                self.spaceship.lives -= 1
+            for shot in self.shots:
+                if asteroid.collide_widget(shot):
                     self.remove_asteroid(asteroid)
-                    self.spaceship.lives -= 1
+                    self.remove_shot(shot)
+                    self.points += 1
 
     def remove_asteroid(self, asteroid):
         self.remove_widget(asteroid)
-        self.asteroids.remove(asteroid)
+        if asteroid in self.asteroids:
+            self.asteroids.remove(asteroid)
 
     def remove_shot(self, shot, *largs):
         self.remove_widget(shot)
