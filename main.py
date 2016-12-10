@@ -2,6 +2,7 @@ from functools import partial
 from random import randint
 
 from kivy.core.window import Window
+from kivy.core.audio import SoundLoader
 from kivy.app import App
 from kivy.uix.widget import Widget
 from kivy.uix.button import Button
@@ -11,6 +12,14 @@ from kivy.properties import (
 )
 from kivy.vector import Vector
 from kivy.clock import Clock
+
+
+class Explosion(Widget):
+    sound = SoundLoader.load('sounds/explosion.ogg')
+
+    def __init__(self):
+        super(Explosion, self).__init__()
+        self.sound.play()
 
 
 class Asteroid(Widget):
@@ -31,6 +40,11 @@ class Shot(Widget):
     lifetime = NumericProperty(1)
     speed = NumericProperty(4)
     angle = NumericProperty(0)
+    sound = SoundLoader.load('sounds/gun.ogg')
+
+    def __init__(self):
+        super(Shot, self).__init__()
+        self.sound.play()
 
     def update(self, dt):
         for i in [0, 1]:
@@ -43,12 +57,13 @@ class Shot(Widget):
 
 
 class Spaceship(Widget):
-    lives = NumericProperty(3 )
+    lives = NumericProperty(3)
     speed = NumericProperty(0)
     thrust = BooleanProperty(False)
     angle = NumericProperty(0)
     angle_rotation = NumericProperty(0)
     rotate = StringProperty()
+    sound = SoundLoader.load('sounds/engine.ogg')
 
     def update(self, dt):
         for i in [0, 1]:
@@ -73,6 +88,10 @@ class Spaceship(Widget):
         self.pos = Vector(self.speed, 0).rotate(self.angle) + self.pos
 
     def move(self, thrust):
+        if not self.thrust and thrust:
+            self.sound.play()
+        elif self.thrust and not thrust:
+            self.sound.stop()
         self.thrust = thrust
 
     def turn(self, rotate=""):
@@ -179,6 +198,7 @@ class RiceRocksGame(Widget):
                     self.remove_asteroid(asteroid)
                     self.remove_shot(shot)
                     self.points += 1
+                    Explosion()
 
     def remove_asteroid(self, asteroid):
         self.remove_widget(asteroid)
