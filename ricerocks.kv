@@ -16,6 +16,14 @@ RiceRocksGame:
             pos: self.pos
             size: self.size
 
+    canvas.before:
+        PushMatrix
+        Rotate:
+            angle: self.angle
+            origin: self.center
+    canvas.after:
+        PopMatrix
+
 <Shot>
     size: 10, 10
     canvas:
