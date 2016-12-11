@@ -116,6 +116,7 @@ class Spaceship(Widget):
             self.pos + Vector(self.size[0] / 2, 0).rotate(self.angle)
         )
         shot.angle = self.angle
+        shot.speed += self.speed
         return shot
 
 
