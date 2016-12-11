@@ -13,13 +13,25 @@ from kivy.properties import (
 from kivy.vector import Vector
 from kivy.clock import Clock
 
+from kivy.core.image import Image
+
 
 class Explosion(Widget):
+    frame = NumericProperty(0)
+    texture = ObjectProperty()
     sound = SoundLoader.load('sounds/explosion.ogg')
 
-    def __init__(self):
+    def __init__(self, *args, **kwargs):
         super(Explosion, self).__init__()
         self.sound.play()
+        texture = Image('images/explosion.png').texture
+        self.textures = [texture.get_region(i*128, 0, 128, 128) for i in range(23)]
+        self.texture = self.textures[self.frame]
+
+    def update(self, dt):
+        self.texture = self.textures[self.frame]
+        self.frame += 1
+        self.property('texture').dispatch(self)
 
 
 class Asteroid(Widget):
@@ -116,6 +128,7 @@ class RiceRocksGame(Widget):
     splash = ObjectProperty(None)
     shots = ListProperty()
     asteroids = ListProperty()
+    explosions = ListProperty()
     points = NumericProperty(0)
 
     def __init__(self, **kwargs):
@@ -186,6 +199,9 @@ class RiceRocksGame(Widget):
         self.spaceship.update(dt)
         [shot.update(dt) for shot in self.shots]
         [asteroid.update(dt) for asteroid in self.asteroids]
+        [exp.update(dt) for exp in self.explosions]
+        [self.remove_explosion(exp) for exp in self.explosions
+         if exp.frame + 1 > len(exp.textures)]
 
         for asteroid in self.asteroids:
             if asteroid.collide_widget(self.spaceship):
@@ -198,7 +214,18 @@ class RiceRocksGame(Widget):
                     self.remove_asteroid(asteroid)
                     self.remove_shot(shot)
                     self.points += 1
-                    Explosion()
+                    self.add_explosion(asteroid.pos)
+
+    def add_explosion(self, pos):
+        explosion = Explosion()
+        explosion.pos = pos
+        self.add_widget(explosion)
+        self.explosions.append(explosion)
+
+    def remove_explosion(self, explosion):
+        self.remove_widget(explosion)
+        if explosion in self.explosions:
+            self.explosions.remove(explosion)
 
     def remove_asteroid(self, asteroid):
         self.remove_widget(asteroid)
