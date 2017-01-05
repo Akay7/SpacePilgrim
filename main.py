@@ -1,5 +1,5 @@
 from functools import partial
-from random import randint
+from random import randint, choice
 
 from kivy.animation import Animation
 from kivy.core.window import Window
@@ -252,8 +252,14 @@ class RiceRocksGame(Widget):
             self.shots.remove(shot)
 
     def generate_asteroid(self, dt):
-        position = Vector(randint(0, Window.size[0]), randint(0, Window.size[1]))
-        if position.distance(self.spaceship.pos) > 50 and len(self.asteroids) < 3:
+        # use left, bottom positions because asteroids can fly around screen
+        positions = {
+            'left':   Vector(0, randint(0, Window.size[1])),
+            'bottom': Vector(randint(0, Window.size[0]), 0),
+        }
+        position = choice(positions.values())
+
+        if position.distance(self.spaceship.pos) > 200 and len(self.asteroids) < 3:
             asteroid = Asteroid()
             asteroid.pos = position
             asteroid.angle = randint(0, 360)
