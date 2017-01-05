@@ -1,6 +1,7 @@
 from functools import partial
 from random import randint
 
+from kivy.animation import Animation
 from kivy.core.window import Window
 from kivy.core.audio import SoundLoader
 from kivy.app import App
@@ -122,6 +123,18 @@ class Spaceship(Widget):
 
 class Splash(Button):
     pass
+
+
+class AnimatedBackground(Widget):
+    def __init__(self, **kwargs):
+        super(AnimatedBackground, self).__init__(**kwargs)
+        self.bind(size=self.animate)
+
+    def animate(self, *args):
+        self.pos = 0, 0
+        self.animation = Animation(pos=(self.size[0], 0), t='linear', duration=15)
+        self.animation.bind(on_complete=self.animate)
+        self.animation.start(self)
 
 
 class RiceRocksGame(Widget):

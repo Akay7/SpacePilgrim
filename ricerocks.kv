@@ -60,10 +60,26 @@ RiceRocksGame:
     pos: root.size[0] / 2, root.size[1] / 2
 
 
+<AnimatedBackground>:
+    source: ''
+    canvas:
+        Rectangle:
+            source: self.source
+            size: self.size
+            pos: self.pos
+        Rectangle:
+            source: self.source
+            size: self.size
+            pos: self.pos[0] - self.size[0], self.pos[1]
+
+
 <RiceRocksGame>:
     spaceship: spaceship
     Image:
         source: "images/nebula_blue.png"
+        size: root.size
+    AnimatedBackground:
+        source: "images/debris.png"
         size: root.size
     Spaceship:
         id: spaceship
