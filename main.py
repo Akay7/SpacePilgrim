@@ -129,15 +129,33 @@ class Splash(Button):
 
 
 class AnimatedBackground(Widget):
+    background = ObjectProperty()
+    uv_pos_x_px = NumericProperty()
+
     def __init__(self, **kwargs):
         super(AnimatedBackground, self).__init__(**kwargs)
-        self.bind(size=self.animate)
+        # ToDo: move link to image to kv file
+        texture = Image('images/debris.png').texture
+        texture.wrap = 'repeat'
+        setattr(self, 'background', texture)
+        self.animate()
+        self.bind(uv_pos_x_px=self.change_uv_pos)
+
+    def change_uv_pos(self, called_by, value):
+        self.background.uvpos = (
+            value / self.background.size[0],
+            self.background.uvpos[1]
+        )
+        self.property('background').dispatch(self)
 
     def animate(self, *args):
-        self.pos = 0, 0
-        self.animation = Animation(pos=(self.size[0], 0), t='linear', duration=15)
+        self.uv_pos_x_px = 0
+        self.animation = Animation(
+            uv_pos_x_px=self.background.size[0], t='linear', duration=15
+        )
         self.animation.bind(on_complete=self.animate)
         self.animation.start(self)
+
 
 
 class RiceRocksGame(Widget):
@@ -154,7 +172,7 @@ class RiceRocksGame(Widget):
             self._keyboard_closed, self, 'text')
         if self._keyboard.widget:
             # If it exists, this widget is a VKeyboard object which you can use
-            # to change the keyboard layout.
+            # to change_uv_pos the keyboard layout.
             pass
         self._keyboard.bind(on_key_down=self._on_keyboard_down)
         self._keyboard.bind(on_key_up=self._on_keyboard_up)

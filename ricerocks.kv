@@ -68,16 +68,11 @@ RiceRocksGame:
 
 
 <AnimatedBackground>:
-    source: ''
     canvas:
         Rectangle:
-            source: self.source
             size: self.size
             pos: self.pos
-        Rectangle:
-            source: self.source
-            size: self.size
-            pos: self.pos[0] - self.size[0], self.pos[1]
+            texture: self.background
 
 
 <RiceRocksGame>:
