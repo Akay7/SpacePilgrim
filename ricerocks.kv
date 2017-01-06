@@ -59,6 +59,14 @@ RiceRocksGame:
     size: 400, 300
 
 
+<Backround@Widget>:
+    source: ''
+    canvas.before:
+        Rectangle:
+            size: self.size
+            source: self.source
+
+
 <AnimatedBackground>:
     source: ''
     canvas:
@@ -74,7 +82,7 @@ RiceRocksGame:
 
 <RiceRocksGame>:
     spaceship: spaceship
-    Image:
+    Backround:
         source: "images/nebula_blue.png"
         size: root.size
     AnimatedBackground:
@@ -93,3 +101,4 @@ RiceRocksGame:
         pos: root.size[0] - 300, root.size[1] - 100
         text: "Lives {}".format(root.spaceship.lives)
         font_size: "25dp"
+
