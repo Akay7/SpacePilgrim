@@ -122,7 +122,10 @@ class Spaceship(Widget):
 
 
 class Splash(Button):
-    pass
+    def on_size_changed(self, called_by, size):
+        self.pos = (Vector(*Window.size) - Vector(*self.size)) / 2
+        print size
+        print "size changed"
 
 
 class AnimatedBackground(Widget):
@@ -206,7 +209,10 @@ class RiceRocksGame(Widget):
     def game_stop(self):
         self.frame_schedule.cancel()
         self.asteroid_schedule.cancel()
+        # create splash screen and centering it
         self.splash = Splash()
+        self.splash.on_size_changed(self, Window.size)
+        self.bind(size=self.splash.on_size_changed)
         self.add_widget(self.splash)
 
     def update(self, dt):
