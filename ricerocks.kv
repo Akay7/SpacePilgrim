@@ -60,41 +60,7 @@ RiceRocksGame:
     on_press: self.parent.game_start()
     size: 400, 300
 
-
-<Backround@Widget>:
-    source: ''
-    canvas.before:
-        Rectangle:
-            size: self.size
-            source: self.source
-
-
-<AnimatedBackground>:
-    canvas:
-        Rectangle:
-            size: self.size
-            pos: self.pos
-            texture: self.background
-
-
-<RiceRocksGame>:
-    spaceship: spaceship
-    Backround:
-        source: "images/nebula_blue.png"
-        size: root.size
-    AnimatedBackground:
-        source: "images/debris.png"
-        size: root.size
-    Spaceship:
-        id: spaceship
-        center: self.parent.center
-
-    Label:
-        pos: root.size[0] - metrics.dp(260), root.size[1] - 100
-        text: "Lives {:<5} Points {}".format(root.spaceship.lives, root.points)
-        font_size: "23dp"
-        font_name: 'data/fonts/RobotoMono-Regular.ttf'
-
+<Buttons>:
     Button:
         text: "Left"
         on_press: root.spaceship.turn('left')
@@ -121,3 +87,40 @@ RiceRocksGame:
         on_press: root.spaceship.shot()
         pos: root.size[0] - metrics.cm(1.5), metrics.cm(0.5)
         size: metrics.cm(1), metrics.cm(1)
+
+<Background@Widget>:
+    source: ''
+    canvas.before:
+        Rectangle:
+            size: self.size
+            source: self.source
+
+
+<AnimatedBackground>:
+    canvas:
+        Rectangle:
+            size: self.size
+            pos: self.pos
+            texture: self.background
+
+
+<RiceRocksGame>:
+    spaceship: spaceship
+    Background:
+        source: "images/nebula_blue.png"
+        size: root.size
+    AnimatedBackground:
+        source: "images/debris.png"
+        size: root.size
+    Spaceship:
+        id: spaceship
+        center: self.parent.center
+
+    Label:
+        pos: root.size[0] - metrics.dp(260), root.size[1] - 100
+        text: "Lives {:<5} Points {}".format(root.spaceship.lives, root.points)
+        font_size: "23dp"
+        font_name: 'data/fonts/RobotoMono-Regular.ttf'
+
+#    Buttons
+#        size: root.size

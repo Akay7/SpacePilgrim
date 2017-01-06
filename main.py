@@ -129,8 +129,10 @@ class Spaceship(Widget):
 class Splash(Button):
     def on_size_changed(self, called_by, size):
         self.pos = (Vector(*Window.size) - Vector(*self.size)) / 2
-        print size
-        print "size changed"
+
+
+class Buttons(Widget):
+    spaceship = ObjectProperty()
 
 
 class AnimatedBackground(Widget):
@@ -225,7 +227,13 @@ class RiceRocksGame(Widget):
         # start schedule
         self.frame_schedule = Clock.schedule_interval(self.update, 1.0/60.0)
         self.asteroid_schedule = Clock.schedule_interval(self.generate_asteroid, 2)
+
+        # remove splash and add nav buttons for android
         self.remove_widget(self.splash)
+
+        if platform == "android":
+            self.buttons = Buttons(size=self.size, spaceship=self.spaceship)
+            self.add_widget(self.buttons)
 
     def game_stop(self):
         self.frame_schedule.cancel()
@@ -235,6 +243,9 @@ class RiceRocksGame(Widget):
         self.splash.on_size_changed(self, Window.size)
         self.bind(size=self.splash.on_size_changed)
         self.add_widget(self.splash)
+
+        if hasattr(self, 'buttons'):
+            self.remove_widget(self.buttons)
 
     def update(self, dt):
         self.spaceship.update(dt)
