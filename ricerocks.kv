@@ -1,3 +1,5 @@
+#:import metrics kivy.metrics
+
 RiceRocksGame:
 
 <Explosion>:
@@ -97,3 +99,29 @@ RiceRocksGame:
         text: "Lives {}".format(root.spaceship.lives)
         font_size: "25dp"
 
+    Button:
+        text: "Left"
+        on_press: root.spaceship.turn('left')
+        on_release: root.spaceship.turn('')
+        pos: metrics.cm(0.5), metrics.cm(0.5)
+        size: metrics.cm(1), metrics.cm(1)
+
+    Button:
+        text: "Right"
+        on_press: root.spaceship.turn('right')
+        on_release: root.spaceship.turn('')
+        pos: metrics.cm(2.5), metrics.cm(0.5)
+        size: metrics.cm(1), metrics.cm(1)
+
+    Button:
+        text: "Up"
+        on_press: root.spaceship.move(True)
+        on_release: root.spaceship.move(False)
+        pos: metrics.cm(1.5), metrics.cm(1.5)
+        size: metrics.cm(1), metrics.cm(1)
+
+    Button:
+        text: "Fire"
+        on_press: root.spaceship.shot()
+        pos: root.size[0] - metrics.cm(1.5), metrics.cm(0.5)
+        size: metrics.cm(1), metrics.cm(1)

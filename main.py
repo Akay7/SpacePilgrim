@@ -118,7 +118,11 @@ class Spaceship(Widget):
         )
         shot.angle = self.angle
         shot.speed += self.speed
-        return shot
+
+        self.parent.shots.append(shot)
+        Clock.schedule_interval(
+            partial(self.parent.remove_shot, shot), shot.lifetime)
+        self.parent.add_widget(shot)
 
 
 class Splash(Button):
@@ -157,7 +161,6 @@ class AnimatedBackground(Widget):
         self.animation.start(self)
 
 
-
 class RiceRocksGame(Widget):
     spaceship = ObjectProperty(None)
     splash = ObjectProperty(None)
@@ -194,11 +197,7 @@ class RiceRocksGame(Widget):
             self.spaceship.turn(keycode[1])
 
         if keycode[1] == 'spacebar':
-            shot = self.spaceship.shot()
-            self.shots.append(shot)
-            Clock.schedule_interval(
-                partial(self.remove_shot, shot), shot.lifetime)
-            self.add_widget(shot)
+            self.spaceship.shot()
 
         if keycode[1] == 'escape':
             keyboard.release()
