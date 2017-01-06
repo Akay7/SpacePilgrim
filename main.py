@@ -1,6 +1,7 @@
 from functools import partial
 from random import randint, choice
 
+from kivy.utils import platform
 from kivy.animation import Animation
 from kivy.core.window import Window
 from kivy.core.audio import SoundLoader
@@ -118,21 +119,47 @@ class Spaceship(Widget):
         )
         shot.angle = self.angle
         shot.speed += self.speed
-        return shot
+
+        self.parent.shots.append(shot)
+        Clock.schedule_interval(
+            partial(self.parent.remove_shot, shot), shot.lifetime)
+        self.parent.add_widget(shot)
 
 
 class Splash(Button):
-    pass
+    def on_size_changed(self, called_by, size):
+        self.pos = (Vector(*Window.size) - Vector(*self.size)) / 2
+
+
+class Buttons(Widget):
+    spaceship = ObjectProperty()
 
 
 class AnimatedBackground(Widget):
+    background = ObjectProperty()
+    uv_pos_x_px = NumericProperty()
+
     def __init__(self, **kwargs):
         super(AnimatedBackground, self).__init__(**kwargs)
-        self.bind(size=self.animate)
+        # ToDo: move link to image to kv file
+        texture = Image('images/debris.png').texture
+        texture.wrap = 'repeat'
+        setattr(self, 'background', texture)
+        self.animate()
+        self.bind(uv_pos_x_px=self.change_uv_pos)
+
+    def change_uv_pos(self, called_by, value):
+        self.background.uvpos = (
+            value / self.background.size[0],
+            self.background.uvpos[1]
+        )
+        self.property('background').dispatch(self)
 
     def animate(self, *args):
-        self.pos = 0, 0
-        self.animation = Animation(pos=(self.size[0], 0), t='linear', duration=15)
+        self.uv_pos_x_px = 0
+        self.animation = Animation(
+            uv_pos_x_px=self.background.size[0], t='linear', duration=15
+        )
         self.animation.bind(on_complete=self.animate)
         self.animation.start(self)
 
@@ -156,6 +183,9 @@ class RiceRocksGame(Widget):
         self._keyboard.bind(on_key_down=self._on_keyboard_down)
         self._keyboard.bind(on_key_up=self._on_keyboard_up)
 
+        if platform == 'android':
+            Window.release_all_keyboards()
+
         self.frame_schedule = Clock.schedule_interval(self.update, 1.0/60.0)
         self.asteroid_schedule = Clock.schedule_interval(self.generate_asteroid, 2)
 
@@ -173,11 +203,7 @@ class RiceRocksGame(Widget):
             self.spaceship.turn(keycode[1])
 
         if keycode[1] == 'spacebar':
-            shot = self.spaceship.shot()
-            self.shots.append(shot)
-            Clock.schedule_interval(
-                partial(self.remove_shot, shot), shot.lifetime)
-            self.add_widget(shot)
+            self.spaceship.shot()
 
         if keycode[1] == 'escape':
             keyboard.release()
@@ -201,13 +227,25 @@ class RiceRocksGame(Widget):
         # start schedule
         self.frame_schedule = Clock.schedule_interval(self.update, 1.0/60.0)
         self.asteroid_schedule = Clock.schedule_interval(self.generate_asteroid, 2)
+
+        # remove splash and add nav buttons for android
         self.remove_widget(self.splash)
+
+        if platform == "android":
+            self.buttons = Buttons(size=self.size, spaceship=self.spaceship)
+            self.add_widget(self.buttons)
 
     def game_stop(self):
         self.frame_schedule.cancel()
         self.asteroid_schedule.cancel()
+        # create splash screen and centering it
         self.splash = Splash()
+        self.splash.on_size_changed(self, Window.size)
+        self.bind(size=self.splash.on_size_changed)
         self.add_widget(self.splash)
+
+        if hasattr(self, 'buttons'):
+            self.remove_widget(self.buttons)
 
     def update(self, dt):
         self.spaceship.update(dt)

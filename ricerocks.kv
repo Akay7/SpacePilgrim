@@ -1,3 +1,5 @@
+#:import metrics kivy.metrics
+
 RiceRocksGame:
 
 <Explosion>:
@@ -57,25 +59,54 @@ RiceRocksGame:
     background_down: "images/splash.png"
     on_press: self.parent.game_start()
     size: 400, 300
-    pos: root.size[0] / 2, root.size[1] / 2
+
+<Buttons>:
+    Button:
+        text: "Left"
+        on_press: root.spaceship.turn('left')
+        on_release: root.spaceship.turn('')
+        pos: metrics.cm(0.5), metrics.cm(0.5)
+        size: metrics.cm(1), metrics.cm(1)
+
+    Button:
+        text: "Right"
+        on_press: root.spaceship.turn('right')
+        on_release: root.spaceship.turn('')
+        pos: metrics.cm(2.5), metrics.cm(0.5)
+        size: metrics.cm(1), metrics.cm(1)
+
+    Button:
+        text: "Up"
+        on_press: root.spaceship.move(True)
+        on_release: root.spaceship.move(False)
+        pos: metrics.cm(1.5), metrics.cm(1.5)
+        size: metrics.cm(1), metrics.cm(1)
+
+    Button:
+        text: "Fire"
+        on_press: root.spaceship.shot()
+        pos: root.size[0] - metrics.cm(1.5), metrics.cm(0.5)
+        size: metrics.cm(1), metrics.cm(1)
+
+<Background@Widget>:
+    source: ''
+    canvas.before:
+        Rectangle:
+            size: self.size
+            source: self.source
 
 
 <AnimatedBackground>:
-    source: ''
     canvas:
         Rectangle:
-            source: self.source
             size: self.size
             pos: self.pos
-        Rectangle:
-            source: self.source
-            size: self.size
-            pos: self.pos[0] - self.size[0], self.pos[1]
+            texture: self.background
 
 
 <RiceRocksGame>:
     spaceship: spaceship
-    Image:
+    Background:
         source: "images/nebula_blue.png"
         size: root.size
     AnimatedBackground:
@@ -86,11 +117,10 @@ RiceRocksGame:
         center: self.parent.center
 
     Label:
-        pos: root.size[0] - 150, root.size[1] - 100
-        text: "Points {}".format(root.points)
-        font_size: "25dp"
+        pos: root.size[0] - metrics.dp(260), root.size[1] - 100
+        text: "Lives {:<5} Points {}".format(root.spaceship.lives, root.points)
+        font_size: "23dp"
+        font_name: 'data/fonts/RobotoMono-Regular.ttf'
 
-    Label:
-        pos: root.size[0] - 300, root.size[1] - 100
-        text: "Lives {}".format(root.spaceship.lives)
-        font_size: "25dp"
+#    Buttons
+#        size: root.size
