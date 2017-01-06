@@ -90,14 +90,10 @@ RiceRocksGame:
         center: self.parent.center
 
     Label:
-        pos: root.size[0] - 150, root.size[1] - 100
-        text: "Points {}".format(root.points)
-        font_size: "25dp"
-
-    Label:
-        pos: root.size[0] - 300, root.size[1] - 100
-        text: "Lives {}".format(root.spaceship.lives)
-        font_size: "25dp"
+        pos: root.size[0] - metrics.dp(260), root.size[1] - 100
+        text: "Lives {:<5} Points {}".format(root.spaceship.lives, root.points)
+        font_size: "23dp"
+        font_name: 'data/fonts/RobotoMono-Regular.ttf'
 
     Button:
         text: "Left"
