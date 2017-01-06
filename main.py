@@ -1,6 +1,7 @@
 from functools import partial
 from random import randint, choice
 
+from kivy.utils import platform
 from kivy.animation import Animation
 from kivy.core.window import Window
 from kivy.core.audio import SoundLoader
@@ -175,10 +176,13 @@ class RiceRocksGame(Widget):
             self._keyboard_closed, self, 'text')
         if self._keyboard.widget:
             # If it exists, this widget is a VKeyboard object which you can use
-            # to change_uv_pos the keyboard layout.
+            # to change the keyboard layout.
             pass
         self._keyboard.bind(on_key_down=self._on_keyboard_down)
         self._keyboard.bind(on_key_up=self._on_keyboard_up)
+
+        if platform == 'android':
+            Window.release_all_keyboards()
 
         self.frame_schedule = Clock.schedule_interval(self.update, 1.0/60.0)
         self.asteroid_schedule = Clock.schedule_interval(self.generate_asteroid, 2)
