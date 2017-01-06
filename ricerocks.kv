@@ -54,6 +54,13 @@ RiceRocksGame:
             pos: self.pos
             size: self.size
 
+<SpaceshipStatus>:
+    Label:
+        pos: root.size[0] - metrics.dp(260), root.size[1] - 100
+        text: "Lives {:<5} Points {}".format(root.spaceship.lives, root.spaceship.points)
+        font_size: "23dp"
+        font_name: 'data/fonts/RobotoMono-Regular.ttf'
+
 <Splash>:
     background_normal: "images/splash.png"
     background_down: "images/splash.png"
@@ -105,22 +112,9 @@ RiceRocksGame:
 
 
 <RiceRocksGame>:
-    spaceship: spaceship
     Background:
         source: "images/nebula_blue.png"
         size: root.size
     AnimatedBackground:
         source: "images/debris.png"
         size: root.size
-    Spaceship:
-        id: spaceship
-        center: self.parent.center
-
-    Label:
-        pos: root.size[0] - metrics.dp(260), root.size[1] - 100
-        text: "Lives {:<5} Points {}".format(root.spaceship.lives, root.points)
-        font_size: "23dp"
-        font_name: 'data/fonts/RobotoMono-Regular.ttf'
-
-#    Buttons
-#        size: root.size
