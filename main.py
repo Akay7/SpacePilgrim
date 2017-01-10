@@ -81,48 +81,6 @@ class Spaceship(Widget):
     rotate = StringProperty()
     sound = SoundLoader.load('sounds/engine.ogg')
 
-    def __init__(self, **kwargs):
-        super(Spaceship, self).__init__(**kwargs)
-        self._keyboard = Window.request_keyboard(
-            self._keyboard_closed, self, 'text')
-        if self._keyboard.widget:
-            # If it exists, this widget is a VKeyboard object which you can use
-            # to change the keyboard layout.
-            pass
-        self._keyboard.bind(on_key_down=self._on_keyboard_down)
-        self._keyboard.bind(on_key_up=self._on_keyboard_up)
-
-        if platform == 'android':
-            Window.release_all_keyboards()
-
-    def _keyboard_closed(self):
-        print('My keyboard have been closed!')
-        self._keyboard.unbind(on_key_down=self._on_keyboard_down)
-        self._keyboard.unbind(on_key_up=self._on_keyboard_up)
-        self._keyboard = None
-
-    def _on_keyboard_down(self, keyboard, keycode, text, modifiers):
-        if keycode[1] == "up":
-            self.move(True)
-
-        if keycode[1] in ["right", "left"]:
-            self.turn(keycode[1])
-
-        if keycode[1] == 'spacebar':
-            self.shot()
-
-        if keycode[1] == 'escape':
-            keyboard.release()
-
-        return True
-
-    def _on_keyboard_up(self, keyboard, keycode):
-        if keycode[1] == "up":
-            self.move(False)
-
-        if keycode[1] in ["right", "left"]:
-            self.turn()
-
     def update(self, dt):
         for i in [0, 1]:
             if self.pos[i] < 0:
@@ -131,29 +89,30 @@ class Spaceship(Widget):
                 self.pos[i] = 0
 
         self.angle += self.angle_rotation
-        self.angle_rotation *= 0.9
         if self.thrust:
             self.speed = 3
         else:
-            self.speed *= 0.9
+            self.speed *= 0.98
 
-        if self.rotate == "left":
-            self.angle_rotation = 3
-        elif self.rotate == "right":
-            self.angle_rotation = -3
-        else:
-            self.angle_rotation *= 0.9
         self.pos = Vector(self.speed, 0).rotate(self.angle) + self.pos
 
-    def move(self, thrust):
-        if not self.thrust and thrust:
+    def thrust_on(self):
+        if not self.thrust:
             self.sound.play()
-        elif self.thrust and not thrust:
-            self.sound.stop()
-        self.thrust = thrust
+        self.thrust = True
 
-    def turn(self, rotate=""):
-        self.rotate = rotate
+    def thrust_off(self):
+        self.thrust = False
+        self.sound.stop()
+
+    def turn_left(self):
+        self.angle_rotation = 3
+
+    def turn_right(self):
+        self.angle_rotation = -3
+
+    def stop_rotation(self):
+        self.angle_rotation = 0
 
     def shot(self):
         shot = Shot(spaceship=self)
@@ -179,8 +138,59 @@ class Splash(Button):
         self.pos = (Vector(*Window.size) - Vector(*self.size)) / 2
 
 
-class Buttons(Widget):
+class ScreenButtonsLayout(Widget):
+    pass
+
+
+class ControlsManager(Widget):
     spaceship = ObjectProperty()
+
+    def __init__(self, **kwargs):
+        super(ControlsManager, self).__init__(**kwargs)
+
+        self._keyboard = Window.request_keyboard(
+            self._keyboard_closed, self, 'text')
+        if self._keyboard.widget:
+            # If it exists, this widget is a VKeyboard object which you can use
+            # to change the keyboard layout.
+            pass
+        self._keyboard.bind(on_key_down=self._on_keyboard_down)
+        self._keyboard.bind(on_key_up=self._on_keyboard_up)
+
+        if platform == 'android':
+            Window.release_all_keyboards()
+        self.add_widget(ScreenButtonsLayout())
+
+    def _keyboard_closed(self):
+        print('My keyboard have been closed!')
+        self._keyboard.unbind(on_key_down=self._on_keyboard_down)
+        self._keyboard.unbind(on_key_up=self._on_keyboard_up)
+        self._keyboard = None
+
+    def _on_keyboard_down(self, keyboard, keycode, text, modifiers):
+        if keycode[1] == "up":
+            self.spaceship.thrust_on()
+
+        if keycode[1] == "right":
+            self.spaceship.turn_right()
+
+        if keycode[1] == "left":
+            self.spaceship.turn_left()
+
+        if keycode[1] == 'spacebar':
+            self.spaceship.shot()
+
+        if keycode[1] == 'escape':
+            keyboard.spaceship.release()
+
+        return True
+
+    def _on_keyboard_up(self, keyboard, keycode):
+        if keycode[1] == "up":
+            self.spaceship.thrust_off()
+
+        if keycode[1] in ["right", "left"]:
+            self.spaceship.stop_rotation()
 
 
 class AnimatedBackground(Widget):
@@ -278,8 +288,7 @@ class RiceRocksGame(Widget):
         self.spaceships.append(spaceship)
         self.add_widget(spaceship)
         self.add_widget(SpaceshipStatus(spaceship=spaceship, size=self.size))
-        if platform == 'android':
-            self.add_widget(Buttons(spaceship=spaceship, size=self.size))
+        self.add_widget(ControlsManager(spaceship=spaceship, size=self.size))
 
     def add_explosion(self, pos):
         explosion = Explosion()
