@@ -159,7 +159,25 @@ class ControlsManager(Widget):
 
         if platform == 'android':
             Window.release_all_keyboards()
-        self.add_widget(ScreenButtonsLayout())
+            self.add_widget(ScreenButtonsLayout())
+
+        self.mapping = {
+            "up": {
+                "down": self.spaceship.thrust_on,
+                "up": self.spaceship.thrust_off
+            },
+            "right": {
+                "down": self.spaceship.turn_right,
+                "up": self.spaceship.stop_rotation
+            },
+            "left": {
+                "down": self.spaceship.turn_left,
+                "up": self.spaceship.stop_rotation
+            },
+            "spacebar": {
+                "down": self.spaceship.shot
+            }
+        }
 
     def _keyboard_closed(self):
         print('My keyboard have been closed!')
@@ -168,29 +186,13 @@ class ControlsManager(Widget):
         self._keyboard = None
 
     def _on_keyboard_down(self, keyboard, keycode, text, modifiers):
-        if keycode[1] == "up":
-            self.spaceship.thrust_on()
-
-        if keycode[1] == "right":
-            self.spaceship.turn_right()
-
-        if keycode[1] == "left":
-            self.spaceship.turn_left()
-
-        if keycode[1] == 'spacebar':
-            self.spaceship.shot()
-
-        if keycode[1] == 'escape':
-            keyboard.spaceship.release()
-
+        if self.mapping.get(keycode[1], {}).has_key('down'):
+            self.mapping[keycode[1]]['down']()
         return True
 
     def _on_keyboard_up(self, keyboard, keycode):
-        if keycode[1] == "up":
-            self.spaceship.thrust_off()
-
-        if keycode[1] in ["right", "left"]:
-            self.spaceship.stop_rotation()
+        if self.mapping.get(keycode[1], {}).has_key('up'):
+            self.mapping[keycode[1]]['up']()
 
 
 class AnimatedBackground(Widget):
