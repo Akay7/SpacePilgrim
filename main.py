@@ -23,18 +23,25 @@ class Explosion(Widget):
     texture = ObjectProperty()
     sound = SoundLoader.load('sounds/explosion.ogg')
 
-    def __init__(self, *args, **kwargs):
-        super(Explosion, self).__init__()
+    def __init__(self, **kwargs):
+        super(Explosion, self).__init__(**kwargs)
         self.sound.play()
         texture = Image('images/explosion.png').texture
         self.textures = [texture.get_region(i*128, 0, 128, 128) for i in range(23)]
         self.texture = self.textures[self.frame]
 
-    def update(self, dt):
-        self.texture = self.textures[self.frame]
-        self.frame += 1
-        self.property('texture').dispatch(self)
+        self.bind(frame=self.change_texture)
+        self.animation = Animation(
+            frame=22, t='linear', duration=0.6
+        )
+        self.animation.start(self)
+        self.animation.bind(on_complete=self.remove_from_parent)
 
+    def change_texture(self, called_by, value):
+        self.texture = self.textures[int(value)]
+
+    def remove_from_parent(self, called_by, value):
+        self.parent.remove_widget(self)
 
 class Asteroid(Widget):
     speed = NumericProperty(4)
@@ -241,7 +248,9 @@ class RiceRocksGame(Widget):
         [self.remove_asteroid(asteroid) for asteroid in self.asteroids]
 
         # start schedule
+        self.frame_schedule.cancel()
         self.frame_schedule = Clock.schedule_interval(self.update, 1.0/60.0)
+        self.asteroid_schedule.cancel()
         self.asteroid_schedule = Clock.schedule_interval(self.generate_asteroid, 2)
 
         self.remove_widget(self.splash)
@@ -253,8 +262,6 @@ class RiceRocksGame(Widget):
         self.add_widget(self.spaceship_controls)
 
     def game_stop(self):
-        self.frame_schedule.cancel()
-        self.asteroid_schedule.cancel()
         # create splash screen and centering it
         self.splash = Splash()
         self.add_widget(self.splash)
@@ -269,18 +276,17 @@ class RiceRocksGame(Widget):
         [spaceship.update(dt) for spaceship in self.spaceships]
         [shot.update(dt) for shot in self.shots]
         [asteroid.update(dt) for asteroid in self.asteroids]
-        [exp.update(dt) for exp in self.explosions]
-        [self.remove_explosion(exp) for exp in self.explosions
-         if exp.frame + 1 > len(exp.textures)]
 
         for asteroid in self.asteroids:
             for spaceship in self.spaceships:
                 if asteroid.collide_widget(spaceship):
                     self.remove_asteroid(asteroid)
                     spaceship.lives -= 1
+                    self.add_explosion(asteroid.pos)
                     if spaceship.lives == 0:
                         self.game_stop()
                         self.remove_spaceship(spaceship)
+                        self.add_explosion(spaceship.pos)
             for shot in self.shots:
                 if asteroid.collide_widget(shot):
                     self.remove_asteroid(asteroid)
