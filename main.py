@@ -134,8 +134,7 @@ class SpaceshipStatus(Widget):
 
 
 class Splash(Button):
-    def on_size_changed(self, called_by, size):
-        self.pos = (Vector(*Window.size) - Vector(*self.size)) / 2
+    pass
 
 
 class ScreenButtonsLayout(Widget):
@@ -225,7 +224,6 @@ class AnimatedBackground(Widget):
 
 
 class RiceRocksGame(Widget):
-    splash = ObjectProperty(None)
     shots = ListProperty()
     spaceships = ListProperty()
     asteroids = ListProperty()
@@ -247,19 +245,25 @@ class RiceRocksGame(Widget):
         self.asteroid_schedule = Clock.schedule_interval(self.generate_asteroid, 2)
 
         self.remove_widget(self.splash)
-        self.add_spaceship()
+        spaceship = self.add_spaceship()
+
+        self.spaceship_status = SpaceshipStatus(spaceship=spaceship)
+        self.add_widget(self.spaceship_status)
+        self.spaceship_controls = ControlsManager(spaceship=spaceship)
+        self.add_widget(self.spaceship_controls)
 
     def game_stop(self):
         self.frame_schedule.cancel()
         self.asteroid_schedule.cancel()
         # create splash screen and centering it
         self.splash = Splash()
-        self.splash.on_size_changed(self, Window.size)
-        self.bind(size=self.splash.on_size_changed)
         self.add_widget(self.splash)
 
-        if hasattr(self, 'buttons'):
-            self.remove_widget(self.buttons)
+        if hasattr(self, 'spaceship_status'):
+            self.remove_widget(self.spaceship_status)
+        if hasattr(self, 'spaceship_controls'):
+            self.remove_widget(self.spaceship_controls)
+            Window.release_all_keyboards()
 
     def update(self, dt):
         [spaceship.update(dt) for spaceship in self.spaceships]
@@ -276,6 +280,7 @@ class RiceRocksGame(Widget):
                     spaceship.lives -= 1
                     if spaceship.lives == 0:
                         self.game_stop()
+                        self.remove_spaceship(spaceship)
             for shot in self.shots:
                 if asteroid.collide_widget(shot):
                     self.remove_asteroid(asteroid)
@@ -289,8 +294,12 @@ class RiceRocksGame(Widget):
         spaceship.pos = Vector(*self.center) - Vector(*spaceship.size) / 2
         self.spaceships.append(spaceship)
         self.add_widget(spaceship)
-        self.add_widget(SpaceshipStatus(spaceship=spaceship, size=self.size))
-        self.add_widget(ControlsManager(spaceship=spaceship, size=self.size))
+        return spaceship
+
+    def remove_spaceship(self, spaceship):
+        spaceship.thrust_off()
+        self.spaceships.remove(spaceship)
+        self.remove_widget(spaceship)
 
     def add_explosion(self, pos):
         explosion = Explosion()

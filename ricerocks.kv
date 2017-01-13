@@ -1,5 +1,6 @@
 #:import metrics kivy.metrics
 #:import Window kivy.core.window.Window
+#:import Vector kivy.vector.Vector
 
 RiceRocksGame:
 
@@ -57,7 +58,7 @@ RiceRocksGame:
 
 <SpaceshipStatus>:
     Label:
-        pos: root.size[0] - metrics.dp(260), root.size[1] - 100
+        pos: Vector(*Window.size) - Vector(metrics.dp(260), 100)
         text: "Lives {:<5} Points {}".format(root.spaceship.lives, root.spaceship.points)
         font_size: "23dp"
         font_name: 'data/fonts/RobotoMono-Regular.ttf'
@@ -67,6 +68,7 @@ RiceRocksGame:
     background_down: "images/splash.png"
     on_press: self.parent.game_start()
     size: 400, 300
+    pos: (Vector(*Window.size) - Vector(*self.size)) / 2
 
 <ScreenButtonsLayout>:
     size: Window.size
