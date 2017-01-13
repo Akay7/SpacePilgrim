@@ -2,7 +2,9 @@
 #:import Window kivy.core.window.Window
 #:import Vector kivy.vector.Vector
 
+
 RiceRocksGame:
+
 
 <Explosion>:
     size: 128, 128
@@ -11,6 +13,7 @@ RiceRocksGame:
             texture: self.texture
             pos: self.pos
             size: self.size
+
 
 <Asteroid>:
     size: 90, 90
@@ -28,6 +31,7 @@ RiceRocksGame:
     canvas.after:
         PopMatrix
 
+
 <Shot>
     size: 10, 10
     canvas:
@@ -35,6 +39,7 @@ RiceRocksGame:
             source: "images/shot1.png"
             pos: self.pos
             size: self.size
+
 
 <Spaceship>:
     ship_stop: "images/ship_stop.png"
@@ -56,6 +61,7 @@ RiceRocksGame:
             pos: self.pos
             size: self.size
 
+
 <SpaceshipStatus>:
     Label:
         pos: Vector(*Window.size) - Vector(metrics.dp(260), 100)
@@ -63,12 +69,14 @@ RiceRocksGame:
         font_size: "23dp"
         font_name: 'data/fonts/RobotoMono-Regular.ttf'
 
+
 <Splash>:
     background_normal: "images/splash.png"
     background_down: "images/splash.png"
     on_press: self.parent.game_start()
     size: 400, 300
     pos: (Vector(*Window.size) - Vector(*self.size)) / 2
+
 
 <ScreenButtonsLayout>:
     size: Window.size
@@ -98,6 +106,7 @@ RiceRocksGame:
         on_press: root.parent.spaceship.shot()
         pos: root.size[0] - metrics.cm(1.5), metrics.cm(0.5)
         size: metrics.cm(1), metrics.cm(1)
+
 
 <Background@Widget>:
     source: ''

@@ -43,6 +43,7 @@ class Explosion(Widget):
     def remove_from_parent(self, called_by, value):
         self.parent.remove_widget(self)
 
+
 class Asteroid(Widget):
     speed = NumericProperty(4)
     angle = NumericProperty(0)
