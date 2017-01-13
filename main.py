@@ -23,17 +23,25 @@ class Explosion(Widget):
     texture = ObjectProperty()
     sound = SoundLoader.load('sounds/explosion.ogg')
 
-    def __init__(self, *args, **kwargs):
-        super(Explosion, self).__init__()
+    def __init__(self, **kwargs):
+        super(Explosion, self).__init__(**kwargs)
         self.sound.play()
         texture = Image('images/explosion.png').texture
         self.textures = [texture.get_region(i*128, 0, 128, 128) for i in range(23)]
         self.texture = self.textures[self.frame]
 
-    def update(self, dt):
-        self.texture = self.textures[self.frame]
-        self.frame += 1
-        self.property('texture').dispatch(self)
+        self.bind(frame=self.change_texture)
+        self.animation = Animation(
+            frame=22, t='linear', duration=0.6
+        )
+        self.animation.start(self)
+        self.animation.bind(on_complete=self.remove_from_parent)
+
+    def change_texture(self, called_by, value):
+        self.texture = self.textures[int(value)]
+
+    def remove_from_parent(self, called_by, value):
+        self.parent.remove_widget(self)
 
 
 class Asteroid(Widget):
@@ -55,9 +63,10 @@ class Shot(Widget):
     speed = NumericProperty(4)
     angle = NumericProperty(0)
     sound = SoundLoader.load('sounds/gun.ogg')
+    spaceship = ObjectProperty()
 
-    def __init__(self):
-        super(Shot, self).__init__()
+    def __init__(self, **kwargs):
+        super(Shot, self).__init__(**kwargs)
         self.sound.play()
 
     def update(self, dt):
@@ -72,6 +81,7 @@ class Shot(Widget):
 
 class Spaceship(Widget):
     lives = NumericProperty(3)
+    points = NumericProperty(0)
     speed = NumericProperty(0)
     thrust = BooleanProperty(False)
     angle = NumericProperty(0)
@@ -87,32 +97,33 @@ class Spaceship(Widget):
                 self.pos[i] = 0
 
         self.angle += self.angle_rotation
-        self.angle_rotation *= 0.9
         if self.thrust:
             self.speed = 3
         else:
-            self.speed *= 0.9
+            self.speed *= 0.98
 
-        if self.rotate == "left":
-            self.angle_rotation = 3
-        elif self.rotate == "right":
-            self.angle_rotation = -3
-        else:
-            self.angle_rotation *= 0.9
         self.pos = Vector(self.speed, 0).rotate(self.angle) + self.pos
 
-    def move(self, thrust):
-        if not self.thrust and thrust:
+    def thrust_on(self):
+        if not self.thrust:
             self.sound.play()
-        elif self.thrust and not thrust:
-            self.sound.stop()
-        self.thrust = thrust
+        self.thrust = True
 
-    def turn(self, rotate=""):
-        self.rotate = rotate
+    def thrust_off(self):
+        self.thrust = False
+        self.sound.stop()
+
+    def turn_left(self):
+        self.angle_rotation = 3
+
+    def turn_right(self):
+        self.angle_rotation = -3
+
+    def stop_rotation(self):
+        self.angle_rotation = 0
 
     def shot(self):
-        shot = Shot()
+        shot = Shot(spaceship=self)
         shot.pos = (
             Vector(*self.size)/2 - Vector(*shot.size)/2 +
             self.pos + Vector(self.size[0] / 2, 0).rotate(self.angle)
@@ -126,13 +137,69 @@ class Spaceship(Widget):
         self.parent.add_widget(shot)
 
 
-class Splash(Button):
-    def on_size_changed(self, called_by, size):
-        self.pos = (Vector(*Window.size) - Vector(*self.size)) / 2
-
-
-class Buttons(Widget):
+class SpaceshipStatus(Widget):
     spaceship = ObjectProperty()
+
+
+class Splash(Button):
+    pass
+
+
+class ScreenButtonsLayout(Widget):
+    pass
+
+
+class ControlsManager(Widget):
+    spaceship = ObjectProperty()
+
+    def __init__(self, **kwargs):
+        super(ControlsManager, self).__init__(**kwargs)
+
+        self._keyboard = Window.request_keyboard(
+            self._keyboard_closed, self, 'text')
+        if self._keyboard.widget:
+            # If it exists, this widget is a VKeyboard object which you can use
+            # to change the keyboard layout.
+            pass
+        self._keyboard.bind(on_key_down=self._on_keyboard_down)
+        self._keyboard.bind(on_key_up=self._on_keyboard_up)
+
+        if platform == 'android':
+            Window.release_all_keyboards()
+            self.add_widget(ScreenButtonsLayout())
+
+        self.mapping = {
+            "up": {
+                "down": self.spaceship.thrust_on,
+                "up": self.spaceship.thrust_off
+            },
+            "right": {
+                "down": self.spaceship.turn_right,
+                "up": self.spaceship.stop_rotation
+            },
+            "left": {
+                "down": self.spaceship.turn_left,
+                "up": self.spaceship.stop_rotation
+            },
+            "spacebar": {
+                "down": self.spaceship.shot
+            }
+        }
+
+    def _keyboard_closed(self):
+        print('My keyboard have been closed!')
+        self._keyboard.unbind(on_key_down=self._on_keyboard_down)
+        self._keyboard.unbind(on_key_up=self._on_keyboard_up)
+        self._keyboard = None
+
+    def _on_keyboard_down(self, keyboard, keycode, text, modifiers):
+        if self.mapping.get(keycode[1], {}).has_key('down'):
+            self.mapping[keycode[1]]['down']()
+        return True
+
+    def _on_keyboard_up(self, keyboard, keycode):
+        if self.mapping.get(keycode[1], {}).has_key('up'):
+            self.mapping[keycode[1]]['up']()
 
 
 class AnimatedBackground(Widget):
@@ -165,108 +232,81 @@ class AnimatedBackground(Widget):
 
 
 class RiceRocksGame(Widget):
-    spaceship = ObjectProperty(None)
-    splash = ObjectProperty(None)
     shots = ListProperty()
+    spaceships = ListProperty()
     asteroids = ListProperty()
     explosions = ListProperty()
-    points = NumericProperty(0)
 
     def __init__(self, **kwargs):
         super(RiceRocksGame, self).__init__(**kwargs)
-        self._keyboard = Window.request_keyboard(
-            self._keyboard_closed, self, 'text')
-        if self._keyboard.widget:
-            # If it exists, this widget is a VKeyboard object which you can use
-            # to change the keyboard layout.
-            pass
-        self._keyboard.bind(on_key_down=self._on_keyboard_down)
-        self._keyboard.bind(on_key_up=self._on_keyboard_up)
-
-        if platform == 'android':
-            Window.release_all_keyboards()
 
         self.frame_schedule = Clock.schedule_interval(self.update, 1.0/60.0)
         self.asteroid_schedule = Clock.schedule_interval(self.generate_asteroid, 2)
-
-    def _keyboard_closed(self):
-        print('My keyboard have been closed!')
-        self._keyboard.unbind(on_key_down=self._on_keyboard_down)
-        self._keyboard.unbind(on_key_up=self._on_keyboard_up)
-        self._keyboard = None
-
-    def _on_keyboard_down(self, keyboard, keycode, text, modifiers):
-        if keycode[1] == "up":
-            self.spaceship.move(True)
-
-        if keycode[1] in ["right", "left"]:
-            self.spaceship.turn(keycode[1])
-
-        if keycode[1] == 'spacebar':
-            self.spaceship.shot()
-
-        if keycode[1] == 'escape':
-            keyboard.release()
-
-        return True
-
-    def _on_keyboard_up(self, keyboard, keycode):
-        if keycode[1] == "up":
-            self.spaceship.move(False)
-
-        if keycode[1] in ["right", "left"]:
-            self.spaceship.turn()
 
     def game_start(self):
         # reset game status
         [self.remove_shot(shot) for shot in self.shots]
         [self.remove_asteroid(asteroid) for asteroid in self.asteroids]
-        self.spaceship.lives = 3
-        self.points = 0
 
         # start schedule
+        self.frame_schedule.cancel()
         self.frame_schedule = Clock.schedule_interval(self.update, 1.0/60.0)
+        self.asteroid_schedule.cancel()
         self.asteroid_schedule = Clock.schedule_interval(self.generate_asteroid, 2)
 
-        # remove splash and add nav buttons for android
         self.remove_widget(self.splash)
+        spaceship = self.add_spaceship()
 
-        if platform == "android":
-            self.buttons = Buttons(size=self.size, spaceship=self.spaceship)
-            self.add_widget(self.buttons)
+        self.spaceship_status = SpaceshipStatus(spaceship=spaceship)
+        self.add_widget(self.spaceship_status)
+        self.spaceship_controls = ControlsManager(spaceship=spaceship)
+        self.add_widget(self.spaceship_controls)
 
     def game_stop(self):
-        self.frame_schedule.cancel()
-        self.asteroid_schedule.cancel()
         # create splash screen and centering it
         self.splash = Splash()
-        self.splash.on_size_changed(self, Window.size)
-        self.bind(size=self.splash.on_size_changed)
         self.add_widget(self.splash)
 
-        if hasattr(self, 'buttons'):
-            self.remove_widget(self.buttons)
+        if hasattr(self, 'spaceship_status'):
+            self.remove_widget(self.spaceship_status)
+        if hasattr(self, 'spaceship_controls'):
+            self.remove_widget(self.spaceship_controls)
+            Window.release_all_keyboards()
 
     def update(self, dt):
-        self.spaceship.update(dt)
+        [spaceship.update(dt) for spaceship in self.spaceships]
         [shot.update(dt) for shot in self.shots]
         [asteroid.update(dt) for asteroid in self.asteroids]
-        [exp.update(dt) for exp in self.explosions]
-        [self.remove_explosion(exp) for exp in self.explosions
-         if exp.frame + 1 > len(exp.textures)]
 
         for asteroid in self.asteroids:
-            if asteroid.collide_widget(self.spaceship):
-                self.remove_asteroid(asteroid)
-                self.spaceship.lives -= 1
-                if self.spaceship.lives == 0:
-                    self.game_stop()
+            for spaceship in self.spaceships:
+                if asteroid.collide_widget(spaceship):
+                    self.remove_asteroid(asteroid)
+                    spaceship.lives -= 1
+                    self.add_explosion(asteroid.pos)
+                    if spaceship.lives == 0:
+                        self.game_stop()
+                        self.remove_spaceship(spaceship)
+                        self.add_explosion(spaceship.pos)
             for shot in self.shots:
                 if asteroid.collide_widget(shot):
                     self.remove_asteroid(asteroid)
+                    shot.spaceship.points += 1
                     self.remove_shot(shot)
-                    self.points += 1
+
                     self.add_explosion(asteroid.pos)
+
+    def add_spaceship(self):
+        spaceship = Spaceship()
+        spaceship.pos = Vector(*self.center) - Vector(*spaceship.size) / 2
+        self.spaceships.append(spaceship)
+        self.add_widget(spaceship)
+        return spaceship
+
+    def remove_spaceship(self, spaceship):
+        spaceship.thrust_off()
+        self.spaceships.remove(spaceship)
+        self.remove_widget(spaceship)
 
     def add_explosion(self, pos):
         explosion = Explosion()
@@ -297,7 +337,10 @@ class RiceRocksGame(Widget):
         }
         position = choice(positions.values())
 
-        if position.distance(self.spaceship.pos) > 200 and len(self.asteroids) < 3:
+        if (
+            len(self.asteroids) < 3 and self.spaceships and
+            min(map(lambda s: position.distance(s.pos), self.spaceships)) > 200
+        ):
             asteroid = Asteroid()
             asteroid.pos = position
             asteroid.angle = randint(0, 360)

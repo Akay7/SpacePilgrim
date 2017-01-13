@@ -1,6 +1,10 @@
 #:import metrics kivy.metrics
+#:import Window kivy.core.window.Window
+#:import Vector kivy.vector.Vector
+
 
 RiceRocksGame:
+
 
 <Explosion>:
     size: 128, 128
@@ -9,6 +13,7 @@ RiceRocksGame:
             texture: self.texture
             pos: self.pos
             size: self.size
+
 
 <Asteroid>:
     size: 90, 90
@@ -26,6 +31,7 @@ RiceRocksGame:
     canvas.after:
         PopMatrix
 
+
 <Shot>
     size: 10, 10
     canvas:
@@ -33,6 +39,7 @@ RiceRocksGame:
             source: "images/shot1.png"
             pos: self.pos
             size: self.size
+
 
 <Spaceship>:
     ship_stop: "images/ship_stop.png"
@@ -54,39 +61,52 @@ RiceRocksGame:
             pos: self.pos
             size: self.size
 
+
+<SpaceshipStatus>:
+    Label:
+        pos: Vector(*Window.size) - Vector(metrics.dp(260), 100)
+        text: "Lives {:<5} Points {}".format(root.spaceship.lives, root.spaceship.points)
+        font_size: "23dp"
+        font_name: 'data/fonts/RobotoMono-Regular.ttf'
+
+
 <Splash>:
     background_normal: "images/splash.png"
     background_down: "images/splash.png"
     on_press: self.parent.game_start()
     size: 400, 300
+    pos: (Vector(*Window.size) - Vector(*self.size)) / 2
 
-<Buttons>:
+
+<ScreenButtonsLayout>:
+    size: Window.size
     Button:
         text: "Left"
-        on_press: root.spaceship.turn('left')
-        on_release: root.spaceship.turn('')
+        on_press: root.parent.spaceship.turn_left()
+        on_release: root.parent.spaceship.stop_rotation()
         pos: metrics.cm(0.5), metrics.cm(0.5)
         size: metrics.cm(1), metrics.cm(1)
 
     Button:
         text: "Right"
-        on_press: root.spaceship.turn('right')
-        on_release: root.spaceship.turn('')
+        on_press: root.parent.spaceship.turn_right()
+        on_release: root.parent.spaceship.stop_rotation()
         pos: metrics.cm(2.5), metrics.cm(0.5)
         size: metrics.cm(1), metrics.cm(1)
 
     Button:
         text: "Up"
-        on_press: root.spaceship.move(True)
-        on_release: root.spaceship.move(False)
+        on_press: root.parent.spaceship.thrust_on()
+        on_release: root.parent.spaceship.thrust_off()
         pos: metrics.cm(1.5), metrics.cm(1.5)
         size: metrics.cm(1), metrics.cm(1)
 
     Button:
         text: "Fire"
-        on_press: root.spaceship.shot()
+        on_press: root.parent.spaceship.shot()
         pos: root.size[0] - metrics.cm(1.5), metrics.cm(0.5)
         size: metrics.cm(1), metrics.cm(1)
+
 
 <Background@Widget>:
     source: ''
@@ -105,22 +125,9 @@ RiceRocksGame:
 
 
 <RiceRocksGame>:
-    spaceship: spaceship
     Background:
         source: "images/nebula_blue.png"
         size: root.size
     AnimatedBackground:
         source: "images/debris.png"
         size: root.size
-    Spaceship:
-        id: spaceship
-        center: self.parent.center
-
-    Label:
-        pos: root.size[0] - metrics.dp(260), root.size[1] - 100
-        text: "Lives {:<5} Points {}".format(root.spaceship.lives, root.points)
-        font_size: "23dp"
-        font_name: 'data/fonts/RobotoMono-Regular.ttf'
-
-#    Buttons
-#        size: root.size
