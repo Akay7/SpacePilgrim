@@ -1,3 +1,5 @@
+__version__ = "0.1.1"
+
 from functools import partial
 from random import randint, choice
 
@@ -16,8 +18,6 @@ from kivy.vector import Vector
 from kivy.clock import Clock
 
 from kivy.core.image import Image
-
-__version__ = "0.1.1"
 
 
 class Explosion(Widget):
