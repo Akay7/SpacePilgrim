@@ -17,6 +17,8 @@ from kivy.clock import Clock
 
 from kivy.core.image import Image
 
+__version__ = "0.1.1"
+
 
 class Explosion(Widget):
     frame = NumericProperty(0)
