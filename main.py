@@ -351,6 +351,8 @@ class RiceRocksGame(Widget):
 
 
 class RiceRocksApp(App):
+    use_kivy_settings = False
+
     def build(self):
         game = RiceRocksGame()
         game.game_stop()
