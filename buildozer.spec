@@ -1,7 +1,7 @@
 [app]
 
 # (str) Title of your application
-title = Rice Rocks Kivy
+title = Rice Rocks
 
 # (str) Package name
 package.name = ricerockskivy
@@ -49,7 +49,7 @@ requirements = kivy
 #presplash.filename = %(source.dir)s/data/presplash.png
 
 # (str) Icon of the application
-#icon.filename = %(source.dir)s/data/icon.png
+icon.filename = %(source.dir)s/data/icon.png
 
 # (str) Supported orientation (one of landscape, portrait or all)
 orientation = landscape
