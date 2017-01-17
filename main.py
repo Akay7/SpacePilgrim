@@ -1,3 +1,5 @@
+__version__ = "0.1.1"
+
 from functools import partial
 from random import randint, choice
 
@@ -349,6 +351,8 @@ class RiceRocksGame(Widget):
 
 
 class RiceRocksApp(App):
+    use_kivy_settings = False
+
     def build(self):
         game = RiceRocksGame()
         game.game_stop()
