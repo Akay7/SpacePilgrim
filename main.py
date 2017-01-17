@@ -195,12 +195,12 @@ class ControlsManager(Widget):
         self._keyboard = None
 
     def _on_keyboard_down(self, keyboard, keycode, text, modifiers):
-        if self.mapping.get(keycode[1], {}).has_key('down'):
+        if 'down' in self.mapping.get(keycode[1], {}):
             self.mapping[keycode[1]]['down']()
         return True
 
     def _on_keyboard_up(self, keyboard, keycode):
-        if self.mapping.get(keycode[1], {}).has_key('up'):
+        if 'up' in self.mapping.get(keycode[1], {}):
             self.mapping[keycode[1]]['up']()
 
 
@@ -337,7 +337,7 @@ class RiceRocksGame(Widget):
             'left':   Vector(0, randint(0, Window.size[1])),
             'bottom': Vector(randint(0, Window.size[0]), 0),
         }
-        position = choice(positions.values())
+        position = choice(list(positions.values()))
 
         if (
             len(self.asteroids) < 3 and self.spaceships and
