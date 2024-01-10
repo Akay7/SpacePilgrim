@@ -11,20 +11,37 @@ This game is remake of the final project of [An Introduction to Interactive Prog
 
 You have two choices:
 
-- Download beta version in [Play Market](https://play.google.com/store/apps/details?id=pro.crazyrussian.ricerockskivy) for your Android device.
+- Download in [Play Market](https://play.google.com/store/apps/details?id=pro.crazyrussian.ricerockskivy) for your Android device.
 
 - You can start it from source code for this you need installing python and Kivy. [Here](https://kivy.org/docs/installation/installation-windows.html#install-win-dist) instructions for Windows users.
 
 - I'm also planing share binary file for MS Windows systems, but it not ready yet.
 
+## Development
 
-## ToDo
+### ToDo
 
 1. Update game for two players on one device.
 2. Draw normal joystick on screen instead buttons.
 3. Add settings for key mapping and etc.
 4. Allow multiplayer game on multiple devices.
 
+### Build for Android
+
+Build and run
+```bash
+buildozer android debug deploy run
+```
+
+View logs
+```bash
+adb logcat | grep -i python
+```
+
+Remove
+```bash
+adb shell pm uninstall pro.crazyrussian.ricerockskivy
+```
 
 ## History versions
 
