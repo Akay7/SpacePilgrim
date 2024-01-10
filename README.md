@@ -1,13 +1,13 @@
-## Rice Rocks
+# Rice Rocks
 
 You control a little spaceship that is opposed to the cosmic asteroids.
 
-### Idea
+## Idea
 
 This game is remake of the final project of [An Introduction to Interactive Programming in Python](https://www.coursera.org/learn/interactive-python-2) course on Coursera from Rice Univercity.
 
 
-### How to start play
+## How to start play
 
 You have two choices:
 
@@ -18,7 +18,7 @@ You have two choices:
 - I'm also planing share binary file for MS Windows systems, but it not ready yet.
 
 
-### ToDo
+## ToDo
 
 1. Update game for two players on one device.
 2. Draw normal joystick on screen instead buttons.
@@ -26,18 +26,24 @@ You have two choices:
 4. Allow multiplayer game on multiple devices.
 
 
-### History versions
+## History versions
 
-##### 1.0.1
+### 0.1.1
 
-- first version in Play Market
+- first version on Play Market
 
 - stable work on python 2.7
 
+### 0.2.0
 
-### Copyright and License
+- public version on Play Market
 
-Copyright 2016 - 2017 Egor Poderyagin.
+- stable work on python 3
+
+
+## Copyright and License
+
+Copyright 2016 - 2017, 2024 Egor Poderiagin.
 
 All source code released under MIT license, more details in LICENSE file.
 
