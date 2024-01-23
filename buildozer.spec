@@ -1,13 +1,13 @@
 [app]
 
 # (str) Title of your application
-title = Rice Rocks
+title = Space Pilgrim
 
 # (str) Package name
-package.name = ricerockskivy
+package.name = spacepilgrim
 
 # (str) Package domain (needed for android/ios packaging)
-package.domain = pro.crazyrussian
+package.domain = pro.crazyrussian.games
 
 # (str) Source code where the main.py live
 source.dir = .
@@ -308,10 +308,10 @@ android.allow_backup = True
 # android.no-byte-compile-python = False
 
 # (str) The format used to package the app for release mode (aab or apk or aar).
-# android.release_artifact = aab
+android.release_artifact = aab
 
 # (str) The format used to package the app for debug mode (apk or aar).
-# android.debug_artifact = apk
+android.debug_artifact = apk
 
 #
 # Python for android (p4a) specific

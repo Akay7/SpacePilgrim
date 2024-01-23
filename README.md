@@ -1,17 +1,18 @@
-# Rice Rocks
+# Space Pilgrim
+(previously Rice Rocks)
 
 You control a little spaceship that is opposed to the cosmic asteroids.
 
 ## Idea
 
-This game is remake of the final project of [An Introduction to Interactive Programming in Python](https://www.coursera.org/learn/interactive-python-2) course on Coursera from Rice Univercity.
+This game is remake of Rice Rocks the final project of [An Introduction to Interactive Programming in Python](https://www.coursera.org/learn/interactive-python-2) course on Coursera from Rice University.
 
 
 ## How to start play
 
 You have two choices:
 
-- Download in [Play Market](https://play.google.com/store/apps/details?id=pro.crazyrussian.ricerockskivy) for your Android device.
+- Download in [Play Market](https://play.google.com/store/apps/details?id=pro.crazyrussian.games.spacepilgrim) for your Android device.
 
 - You can start it from source code for this you need installing python and Kivy. [Here](https://kivy.org/docs/installation/installation-windows.html#install-win-dist) instructions for Windows users.
 
@@ -40,7 +41,12 @@ adb logcat | grep -i python
 
 Remove
 ```bash
-adb shell pm uninstall pro.crazyrussian.ricerockskivy
+adb shell pm uninstall pro.crazyrussian.games.spacepilgrim
+```
+
+Release
+```bash
+buildozer android release
 ```
 
 ## History versions
@@ -57,6 +63,7 @@ adb shell pm uninstall pro.crazyrussian.ricerockskivy
 
 - stable work on python 3
 
+- renamed from Rice Rocks to Space Pilgrim
 
 ## Copyright and License
 

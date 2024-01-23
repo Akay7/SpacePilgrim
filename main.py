@@ -233,14 +233,14 @@ class AnimatedBackground(Widget):
         self.animation.start(self)
 
 
-class RiceRocksGame(Widget):
+class SpacePilgrimGame(Widget):
     shots = ListProperty()
     spaceships = ListProperty()
     asteroids = ListProperty()
     explosions = ListProperty()
 
     def __init__(self, **kwargs):
-        super(RiceRocksGame, self).__init__(**kwargs)
+        super().__init__(**kwargs)
 
         self.frame_schedule = Clock.schedule_interval(self.update, 1.0/60.0)
         self.asteroid_schedule = Clock.schedule_interval(self.generate_asteroid, 2)
@@ -350,11 +350,11 @@ class RiceRocksGame(Widget):
             self.asteroids.append(asteroid)
 
 
-class RiceRocksApp(App):
+class SpacePilgrimApp(App):
     use_kivy_settings = False
 
     def build(self):
-        game = RiceRocksGame()
+        game = SpacePilgrimGame()
         game.game_stop()
         return game
 
@@ -362,4 +362,4 @@ class RiceRocksApp(App):
         return True
 
 if __name__ == '__main__':
-    RiceRocksApp().run()
+    SpacePilgrimApp().run()
