@@ -1,15 +1,18 @@
 __version__ = "0.2.1"
 
+import json
+import os
 from functools import partial
 from random import randint, choice
 
 from kivy.utils import platform
 from kivy.animation import Animation
-from kivy.core.window import Window
+from kivy.core.window import Window, Keyboard
 from kivy.core.audio import SoundLoader
 from kivy.app import App
 from kivy.uix.widget import Widget
 from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.button import Button
 from kivy.properties import (
     ObjectProperty, NumericProperty, BooleanProperty, StringProperty,
     ListProperty,
@@ -23,14 +26,139 @@ from kivy.core.image import Image
 # Window key codes (SDL2) -> actions. Android TV remote D-pad and a gamepad
 # D-pad delivered as keys arrive as the arrow keys; 1073741943 is
 # SDL_SCANCODE_SELECT which Android sends for the D-pad centre button.
-KEY_ACTIONS = {
-    273: 'up', 119: 'up',          # up arrow, W
-    274: 'down', 115: 'down',      # down arrow, S
-    276: 'left', 97: 'left',       # left arrow, A
-    275: 'right', 100: 'right',    # right arrow, D
-    32: 'fire', 13: 'fire', 271: 'fire', 1073741943: 'fire',
-    27: 'back',                    # Escape / Android Back
+# These keys are fixed: they drive the menus and leaving the game, so they
+# can not be rebound and a bad binding can never lock the player out.
+RESERVED_KEY_ACTIONS = {
+    273: 'up', 274: 'down', 276: 'left', 275: 'right',   # arrow keys
+    13: 'fire', 271: 'fire', 1073741943: 'fire',         # Enter, KP Enter, Select
+    27: 'back',                                          # Escape / Android Back
 }
+
+# Rebindable gameplay keys are stored as SDL scancodes: the physical key,
+# independent of the keyboard layout (W stays W on a Russian layout).
+DEFAULT_KEY_BINDINGS = {
+    'up': [26],       # W
+    'left': [4],      # A
+    'right': [7],     # D
+    'fire': [44],     # Space
+}
+RESERVED_SCANCODES = {79, 80, 81, 82, 40, 88, 41}  # arrows, Enter, KP Enter, Esc
+ACTION_LABELS = {
+    'up': 'Thrust',
+    'left': 'Turn left',
+    'right': 'Turn right',
+    'fire': 'Fire',
+}
+
+# SDL scancode -> latin name shown in the settings screen.
+SCANCODE_NAMES = {
+    **{4 + i: chr(ord('A') + i) for i in range(26)},       # A-Z
+    **{30 + i: str(i + 1) for i in range(9)}, 39: '0',      # 1-9, 0
+    **{58 + i: 'F{}'.format(i + 1) for i in range(12)},     # F1-F12
+    44: 'Space', 45: '-', 46: '=', 47: '[', 48: ']', 49: '\\', 51: ';',
+    52: "'", 53: '`', 54: ',', 55: '.', 56: '/',
+    42: 'Backspace', 43: 'Tab', 57: 'CapsLock',
+    73: 'Insert', 74: 'Home', 75: 'PageUp', 76: 'Delete', 77: 'End',
+    78: 'PageDown', 79: 'Right', 80: 'Left', 81: 'Down', 82: 'Up',
+    **{89 + i: 'Num{}'.format(i + 1) for i in range(9)}, 98: 'Num0',
+    224: 'LCtrl', 225: 'LShift', 226: 'LAlt',
+    228: 'RCtrl', 229: 'RShift', 230: 'RAlt',
+}
+
+
+def scancode_name(scancode):
+    return SCANCODE_NAMES.get(scancode, 'Key {}'.format(scancode))
+
+
+def scancode_for(key, scancode=None):
+    """The physical key. Kivy passes the SDL scancode with key events; when
+    it is missing, derive it for plain ASCII keys."""
+    if scancode:
+        return scancode
+    if 97 <= key <= 122:
+        return key - 97 + 4
+    if 49 <= key <= 57:
+        return key - 49 + 30
+    return {48: 39, 32: 44}.get(key)
+
+
+class KeyBindings:
+    """Configurable keyboard bindings (action -> scancodes), optionally
+    persisted as JSON."""
+
+    VERSION = 2   # version 1 stored layout dependent key codes
+
+    def __init__(self, path=None):
+        self.path = path
+        self.keys = {a: list(k) for a, k in DEFAULT_KEY_BINDINGS.items()}
+        self.load()
+
+    def label(self, action):
+        return ', '.join(scancode_name(sc) for sc in self.keys[action])
+
+    def action_for(self, key, scancode=None):
+        sc = scancode_for(key, scancode)
+        for action, scancodes in self.keys.items():
+            if sc in scancodes:
+                return action
+        return RESERVED_KEY_ACTIONS.get(key)
+
+    def rebind(self, action, key, scancode=None):
+        """Bind the physical key to `action`. Returns None on success or a
+        message saying why the key was refused (the old binding is kept)."""
+        sc = scancode_for(key, scancode)
+        if sc is None:
+            return 'That key can not be used'
+        if key in RESERVED_KEY_ACTIONS or sc in RESERVED_SCANCODES:
+            return 'That key is reserved'
+        for other, scancodes in self.keys.items():
+            if other != action and sc in scancodes:
+                return 'Already used for {}'.format(ACTION_LABELS[other])
+        self.keys[action] = [sc]
+        self.save()
+
+    def reset(self):
+        self.keys = {a: list(k) for a, k in DEFAULT_KEY_BINDINGS.items()}
+        self.save()
+
+    def _valid(self, data):
+        if not isinstance(data, dict) or data.get('version') != self.VERSION:
+            return False
+        keys = data.get('keys')
+        if not isinstance(keys, dict) or set(keys) != set(DEFAULT_KEY_BINDINGS):
+            return False
+        seen = set()
+        for scancodes in keys.values():
+            if not isinstance(scancodes, list) or not scancodes:
+                return False
+            for sc in scancodes:
+                if (not isinstance(sc, int) or isinstance(sc, bool)
+                        or sc in RESERVED_SCANCODES or sc in seen):
+                    return False
+                seen.add(sc)
+        return True
+
+    def load(self):
+        if not self.path:
+            return
+        try:
+            with open(self.path) as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return
+        if self._valid(data):
+            self.keys = {a: list(data['keys'][a]) for a in DEFAULT_KEY_BINDINGS}
+
+    def save(self):
+        if not self.path:
+            return
+        try:
+            os.makedirs(os.path.dirname(self.path) or '.', exist_ok=True)
+            with open(self.path, 'w') as f:
+                json.dump({'version': self.VERSION, 'keys': self.keys}, f)
+        except OSError:
+            pass  # keep the in-memory bindings for this session
+
 
 # Default gamepad layout (SDL joystick button ids, Xbox-style pad):
 # A / X fire, B / Y thrust, Back / Start return to the menu.
@@ -181,7 +309,8 @@ class SpaceshipStatus(Widget):
     spaceship = ObjectProperty()
 
 
-class Menu(BoxLayout):
+class ButtonColumn(BoxLayout):
+    """Vertical list of buttons that can be navigated with the keyboard."""
     selected = NumericProperty(0)
 
     def __init__(self, **kwargs):
@@ -191,7 +320,8 @@ class Menu(BoxLayout):
     @property
     def buttons(self):
         # children are stored bottom to top, the menu reads top to bottom
-        return [b for b in reversed(self.children) if not b.disabled]
+        return [b for b in reversed(self.children)
+                if isinstance(b, Button) and not b.disabled]
 
     def highlight(self):
         buttons = self.buttons
@@ -207,6 +337,58 @@ class Menu(BoxLayout):
 
     def activate(self):
         self.buttons[self.selected % len(self.buttons)].dispatch('on_press')
+
+
+class Menu(ButtonColumn):
+    pass
+
+
+class SettingsScreen(ButtonColumn):
+    """Controls settings: pick an action, then press the new key."""
+    bindings = ObjectProperty()
+    waiting = StringProperty('')   # action waiting for a key, '' if none
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.refresh()
+
+    def refresh(self, message=''):
+        ids = self.ids
+        if 'message' not in ids:
+            return
+        for action, label in ACTION_LABELS.items():
+            if self.waiting == action:
+                value = 'press a key...'
+            else:
+                value = self.bindings.label(action)
+            ids['btn_' + action].text = '{}: {}'.format(label, value)
+        ids['message'].text = message
+
+    def begin_rebind(self, action):
+        self.waiting = action
+        self.refresh()
+
+    def cancel_rebind(self):
+        self.waiting = ''
+        self.refresh()
+
+    def handle_key(self, key, scancode=None):
+        """Consume `key` while waiting for a new binding. Returns True if the
+        key was consumed."""
+        if not self.waiting:
+            return False
+        action, self.waiting = self.waiting, ''
+        if key == 27:
+            self.refresh()
+        else:
+            error = self.bindings.rebind(action, key, scancode)
+            self.refresh(error or '')
+        return True
+
+    def reset(self):
+        self.waiting = ''
+        self.bindings.reset()
+        self.refresh()
 
 
 class ScreenButtonsLayout(Widget):
@@ -303,6 +485,10 @@ class SpacePilgrimGame(Widget):
         self.touchscreen = platform == 'android' and not is_android_tv()
         self.touch_ui = self.touchscreen
         self._inputs_down = set()
+        app = App.get_running_app()
+        self.bindings = KeyBindings(
+            os.path.join(app.user_data_dir, 'keybindings.json')
+            if app else None)
         Window.bind(
             on_key_down=self._on_key_down,
             on_key_up=self._on_key_up,
@@ -361,7 +547,18 @@ class SpacePilgrimGame(Widget):
                 return
             self._inputs_down.discard(source)
 
-        if self.menu_active:
+        if self.settings_active:
+            if not pressed or self.settings.waiting:
+                return
+            if action == 'up':
+                self.settings.move(-1)
+            elif action == 'down':
+                self.settings.move(1)
+            elif action == 'fire':
+                self.settings.activate()
+            elif action == 'back':
+                self.close_settings()
+        elif self.menu_active:
             if not pressed:
                 return
             if action == 'up':
@@ -389,15 +586,37 @@ class SpacePilgrimGame(Widget):
     def menu_active(self):
         return hasattr(self, 'menu') and self.menu in self.children
 
-    def _on_key_down(self, window, key, *args):
-        action = KEY_ACTIONS.get(key)
+    @property
+    def settings_active(self):
+        return hasattr(self, 'settings') and self.settings in self.children
+
+    def show_settings(self):
+        self.remove_widget(self.menu)
+        self.settings = SettingsScreen(bindings=self.bindings)
+        self.add_widget(self.settings)
+
+    def close_settings(self):
+        self.remove_widget(self.settings)
+        del self.settings
+        self.add_widget(self.menu)
+        self.menu.highlight()
+
+    def _on_key_down(self, window, key, scancode=None, *args):
+        if self.settings_active and self.settings.waiting:
+            # ignore auto-repeat of the key until it is released
+            self._inputs_down.add(('key', key))
+            self.settings.handle_key(key, scancode)
+            return
+        action = self.bindings.action_for(key, scancode)
         if action:
             self._input(('key', key), action, True)
 
-    def _on_key_up(self, window, key, *args):
-        action = KEY_ACTIONS.get(key)
+    def _on_key_up(self, window, key, scancode=None, *args):
+        action = self.bindings.action_for(key, scancode)
         if action:
             self._input(('key', key), action, False)
+        else:
+            self._inputs_down.discard(('key', key))
 
     def _on_keyboard(self, window, key, *args):
         # Stop Kivy from quitting on Escape / pausing on Android Back while
