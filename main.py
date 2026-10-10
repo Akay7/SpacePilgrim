@@ -9,7 +9,7 @@ from kivy.core.window import Window
 from kivy.core.audio import SoundLoader
 from kivy.app import App
 from kivy.uix.widget import Widget
-from kivy.uix.button import Button
+from kivy.uix.boxlayout import BoxLayout
 from kivy.properties import (
     ObjectProperty, NumericProperty, BooleanProperty, StringProperty,
     ListProperty,
@@ -18,6 +18,44 @@ from kivy.vector import Vector
 from kivy.clock import Clock
 
 from kivy.core.image import Image
+
+
+# Window key codes (SDL2) -> actions. Android TV remote D-pad and a gamepad
+# D-pad delivered as keys arrive as the arrow keys; 1073741943 is
+# SDL_SCANCODE_SELECT which Android sends for the D-pad centre button.
+KEY_ACTIONS = {
+    273: 'up', 119: 'up',          # up arrow, W
+    274: 'down', 115: 'down',      # down arrow, S
+    276: 'left', 97: 'left',       # left arrow, A
+    275: 'right', 100: 'right',    # right arrow, D
+    32: 'fire', 13: 'fire', 271: 'fire', 1073741943: 'fire',
+    27: 'back',                    # Escape / Android Back
+}
+
+# Default gamepad layout (SDL joystick button ids, Xbox-style pad):
+# A / X fire, B / Y thrust, Back / Start return to the menu.
+# Left stick and D-pad steer.
+JOY_BUTTON_ACTIONS = {
+    0: 'fire', 2: 'fire',
+    1: 'up', 3: 'up',
+    6: 'back', 7: 'back',
+}
+JOY_AXIS_DEADZONE = 0.5
+
+
+def is_android_tv():
+    if platform != 'android':
+        return False
+    try:
+        from jnius import autoclass
+        activity = autoclass('org.kivy.android.PythonActivity').mActivity
+        package_manager = activity.getPackageManager()
+        return bool(
+            package_manager.hasSystemFeature('android.software.leanback') or
+            package_manager.hasSystemFeature('android.hardware.type.television')
+        )
+    except Exception:
+        return False
 
 
 class Explosion(Widget):
@@ -143,8 +181,32 @@ class SpaceshipStatus(Widget):
     spaceship = ObjectProperty()
 
 
-class Splash(Button):
-    pass
+class Menu(BoxLayout):
+    selected = NumericProperty(0)
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.highlight()
+
+    @property
+    def buttons(self):
+        # children are stored bottom to top, the menu reads top to bottom
+        return [b for b in reversed(self.children) if not b.disabled]
+
+    def highlight(self):
+        buttons = self.buttons
+        for button in buttons:
+            button.background_color = (1, 1, 1, 1)
+        if buttons:
+            buttons[self.selected % len(buttons)].background_color = (
+                0.3, 0.7, 1, 1)
+
+    def move(self, step):
+        self.selected = (self.selected + step) % len(self.buttons)
+        self.highlight()
+
+    def activate(self):
+        self.buttons[self.selected % len(self.buttons)].dispatch('on_press')
 
 
 class ScreenButtonsLayout(Widget):
@@ -152,56 +214,47 @@ class ScreenButtonsLayout(Widget):
 
 
 class ControlsManager(Widget):
+    """Turns abstract actions (up, left, right, fire) into spaceship
+    commands. Actions come from keyboard, gamepad and on-screen buttons."""
     spaceship = ObjectProperty()
 
     def __init__(self, **kwargs):
-        super(ControlsManager, self).__init__(**kwargs)
+        super().__init__(**kwargs)
+        self.held = set()
+        self.touch_buttons = ScreenButtonsLayout()
+        self.add_widget(self.touch_buttons)
 
-        self._keyboard = Window.request_keyboard(
-            self._keyboard_closed, self, 'text')
-        if self._keyboard.widget:
-            # If it exists, this widget is a VKeyboard object which you can use
-            # to change the keyboard layout.
-            pass
-        self._keyboard.bind(on_key_down=self._on_keyboard_down)
-        self._keyboard.bind(on_key_up=self._on_keyboard_up)
+    def show_touch_buttons(self, visible):
+        self.touch_buttons.opacity = 1 if visible else 0
+        self.touch_buttons.disabled = not visible
 
-        if platform == 'android':
-            Window.release_all_keyboards()
-            self.add_widget(ScreenButtonsLayout())
+    def press(self, action):
+        if action in self.held:
+            return
+        self.held.add(action)
+        if action == 'fire':
+            self.spaceship.shot()
+        self._apply()
 
-        self.mapping = {
-            "up": {
-                "down": self.spaceship.thrust_on,
-                "up": self.spaceship.thrust_off
-            },
-            "right": {
-                "down": self.spaceship.turn_right,
-                "up": self.spaceship.stop_rotation
-            },
-            "left": {
-                "down": self.spaceship.turn_left,
-                "up": self.spaceship.stop_rotation
-            },
-            "spacebar": {
-                "down": self.spaceship.shot
-            }
-        }
+    def release(self, action):
+        self.held.discard(action)
+        self._apply()
 
-    def _keyboard_closed(self):
-        print('My keyboard have been closed!')
-        self._keyboard.unbind(on_key_down=self._on_keyboard_down)
-        self._keyboard.unbind(on_key_up=self._on_keyboard_up)
-        self._keyboard = None
+    def _apply(self):
+        spaceship = self.spaceship
+        if ('up' in self.held) != spaceship.thrust:
+            if 'up' in self.held:
+                spaceship.thrust_on()
+            else:
+                spaceship.thrust_off()
 
-    def _on_keyboard_down(self, keyboard, keycode, text, modifiers):
-        if 'down' in self.mapping.get(keycode[1], {}):
-            self.mapping[keycode[1]]['down']()
-        return True
-
-    def _on_keyboard_up(self, keyboard, keycode):
-        if 'up' in self.mapping.get(keycode[1], {}):
-            self.mapping[keycode[1]]['up']()
+        left, right = 'left' in self.held, 'right' in self.held
+        if left and not right:
+            spaceship.turn_left()
+        elif right and not left:
+            spaceship.turn_right()
+        else:
+            spaceship.stop_rotation()
 
 
 class AnimatedBackground(Widget):
@@ -245,6 +298,22 @@ class SpacePilgrimGame(Widget):
         self.frame_schedule = Clock.schedule_interval(self.update, 1.0/60.0)
         self.asteroid_schedule = Clock.schedule_interval(self.generate_asteroid, 2)
 
+        # On-screen buttons only for touch devices (not TV); they hide as soon
+        # as a keyboard or gamepad is used and come back on the next touch.
+        self.touchscreen = platform == 'android' and not is_android_tv()
+        self.touch_ui = self.touchscreen
+        self._inputs_down = set()
+        Window.bind(
+            on_key_down=self._on_key_down,
+            on_key_up=self._on_key_up,
+            on_keyboard=self._on_keyboard,
+            on_joy_axis=self._on_joy_axis,
+            on_joy_hat=self._on_joy_hat,
+            on_joy_button_down=self._on_joy_button_down,
+            on_joy_button_up=self._on_joy_button_up,
+            on_touch_down=self._on_window_touch,
+        )
+
     def game_start(self):
         # reset game status
         [self.remove_shot(shot) for shot in self.shots]
@@ -256,24 +325,129 @@ class SpacePilgrimGame(Widget):
         self.asteroid_schedule.cancel()
         self.asteroid_schedule = Clock.schedule_interval(self.generate_asteroid, 2)
 
-        self.remove_widget(self.splash)
+        self.remove_widget(self.menu)
         spaceship = self.add_spaceship()
 
         self.spaceship_status = SpaceshipStatus(spaceship=spaceship)
         self.add_widget(self.spaceship_status)
         self.spaceship_controls = ControlsManager(spaceship=spaceship)
+        self.spaceship_controls.show_touch_buttons(self.touch_ui)
         self.add_widget(self.spaceship_controls)
+        self._inputs_down.clear()
+
+    # ---- input routing -------------------------------------------------
+
+    def _set_touch_ui(self, visible):
+        visible = visible and self.touchscreen
+        if visible != self.touch_ui:
+            self.touch_ui = visible
+            controls = getattr(self, 'spaceship_controls', None)
+            if controls is not None:
+                controls.show_touch_buttons(visible)
+
+    def _on_window_touch(self, window, touch):
+        self._set_touch_ui(True)
+
+    def _input(self, source, action, pressed):
+        """Send a press/release of `action` coming from `source` (a hashable
+        id of the physical key/button/axis) to the menu or the game."""
+        if pressed:
+            if source in self._inputs_down:
+                return  # key auto-repeat
+            self._inputs_down.add(source)
+            self._set_touch_ui(False)
+        else:
+            if source not in self._inputs_down:
+                return
+            self._inputs_down.discard(source)
+
+        if self.menu_active:
+            if not pressed:
+                return
+            if action == 'up':
+                self.menu.move(-1)
+            elif action == 'down':
+                self.menu.move(1)
+            elif action == 'fire':
+                self.menu.activate()
+            elif action == 'back' and platform != 'android':
+                App.get_running_app().stop()
+            # On Android the Back key is left to Kivy: it pauses the app.
+        elif action == 'back':
+            if pressed:
+                self.game_stop()
+        else:
+            controls = getattr(self, 'spaceship_controls', None)
+            if controls is None:
+                return
+            if pressed:
+                controls.press(action)
+            else:
+                controls.release(action)
+
+    @property
+    def menu_active(self):
+        return hasattr(self, 'menu') and self.menu in self.children
+
+    def _on_key_down(self, window, key, *args):
+        action = KEY_ACTIONS.get(key)
+        if action:
+            self._input(('key', key), action, True)
+
+    def _on_key_up(self, window, key, *args):
+        action = KEY_ACTIONS.get(key)
+        if action:
+            self._input(('key', key), action, False)
+
+    def _on_keyboard(self, window, key, *args):
+        # Stop Kivy from quitting on Escape / pausing on Android Back while
+        # playing: Back returns to the menu instead.
+        if key == 27 and not (platform == 'android' and self.menu_active):
+            return True
+
+    def _axis(self, stick, axis, value, negative, positive):
+        self._input(
+            ('axis', stick, axis, negative), negative,
+            value < -JOY_AXIS_DEADZONE)
+        self._input(
+            ('axis', stick, axis, positive), positive,
+            value > JOY_AXIS_DEADZONE)
+
+    def _on_joy_axis(self, window, stick, axis, value):
+        value = value / 32767
+        if axis == 0:
+            self._axis(stick, axis, value, 'left', 'right')
+        elif axis == 1:
+            self._axis(stick, axis, value, 'up', 'down')
+
+    def _on_joy_hat(self, window, stick, hat, value):
+        x, y = value
+        self._axis(stick, ('hat', hat, 'x'), x, 'left', 'right')
+        self._axis(stick, ('hat', hat, 'y'), -y, 'up', 'down')
+
+    def _on_joy_button_down(self, window, stick, button):
+        action = JOY_BUTTON_ACTIONS.get(button)
+        if action:
+            self._input(('button', stick, button), action, True)
+
+    def _on_joy_button_up(self, window, stick, button):
+        action = JOY_BUTTON_ACTIONS.get(button)
+        if action:
+            self._input(('button', stick, button), action, False)
 
     def game_stop(self):
-        # create splash screen and centering it
-        self.splash = Splash()
-        self.add_widget(self.splash)
+        self.menu = Menu()
+        self.add_widget(self.menu)
+
+        for spaceship in list(self.spaceships):
+            self.remove_spaceship(spaceship)
 
         if hasattr(self, 'spaceship_status'):
             self.remove_widget(self.spaceship_status)
         if hasattr(self, 'spaceship_controls'):
             self.remove_widget(self.spaceship_controls)
-            Window.release_all_keyboards()
+            del self.spaceship_controls
+        self._inputs_down.clear()
 
     def update(self, dt):
         [spaceship.update(dt) for spaceship in self.spaceships]
@@ -288,7 +462,6 @@ class SpacePilgrimGame(Widget):
                     self.add_explosion(asteroid.pos)
                     if spaceship.lives == 0:
                         self.game_stop()
-                        self.remove_spaceship(spaceship)
                         self.add_explosion(spaceship.pos)
             for shot in self.shots:
                 if asteroid.collide_widget(shot):

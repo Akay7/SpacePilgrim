@@ -2,10 +2,6 @@
 #:import Window kivy.core.window.Window
 #:import Vector kivy.vector.Vector
 
-
-SpacePilgrimGame:
-
-
 <Explosion>:
     size: 128, 128
     canvas:
@@ -70,40 +66,56 @@ SpacePilgrimGame:
         font_name: 'data/fonts/RobotoMono-Regular.ttf'
 
 
-<Splash>:
-    background_normal: "images/splash.png"
-    background_down: "images/splash.png"
-    on_press: self.parent.game_start()
-    size: 400, 300
+<Menu>:
+    orientation: "vertical"
+    spacing: metrics.dp(10)
+    size: metrics.dp(300), metrics.dp(280)
     pos: (Vector(*Window.size) - Vector(*self.size)) / 2
+
+    Button:
+        text: "Single player"
+        on_press: root.parent.game_start()
+
+    Button:
+        text: "Multiplayer"
+        disabled: True
+
+    Button:
+        text: "Settings"
+        disabled: True
+
+    Button:
+        text: "Exit"
+        on_press: app.stop()
 
 
 <ScreenButtonsLayout>:
     size: Window.size
     Button:
         text: "Left"
-        on_press: root.parent.spaceship.turn_left()
-        on_release: root.parent.spaceship.stop_rotation()
+        on_press: root.parent.press('left')
+        on_release: root.parent.release('left')
         pos: metrics.cm(0.5), metrics.cm(0.5)
         size: metrics.cm(1), metrics.cm(1)
 
     Button:
         text: "Right"
-        on_press: root.parent.spaceship.turn_right()
-        on_release: root.parent.spaceship.stop_rotation()
+        on_press: root.parent.press('right')
+        on_release: root.parent.release('right')
         pos: metrics.cm(2.5), metrics.cm(0.5)
         size: metrics.cm(1), metrics.cm(1)
 
     Button:
         text: "Up"
-        on_press: root.parent.spaceship.thrust_on()
-        on_release: root.parent.spaceship.thrust_off()
+        on_press: root.parent.press('up')
+        on_release: root.parent.release('up')
         pos: metrics.cm(1.5), metrics.cm(1.5)
         size: metrics.cm(1), metrics.cm(1)
 
     Button:
         text: "Fire"
-        on_press: root.parent.spaceship.shot()
+        on_press: root.parent.press('fire')
+        on_release: root.parent.release('fire')
         pos: root.size[0] - metrics.cm(1.5), metrics.cm(0.5)
         size: metrics.cm(1), metrics.cm(1)
 

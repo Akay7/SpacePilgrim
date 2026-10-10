@@ -26,6 +26,35 @@ You have two choices:
 2. Draw normal joystick on screen instead buttons.
 3. Add settings for key mapping and etc.
 4. Allow multiplayer game on multiple devices.
+5. Implement Multiplayer and Settings menu entries (currently disabled).
+6. Ship on Android TV (see below).
+
+#### Android TV
+
+The game already runs as a landscape Kivy app and handles arrow keys + space, which a TV remote D-pad and gamepad send as key events.
+
+- [ ] Manifest: add `android.intent.category.LEANBACK_LAUNCHER` intent filter so the app appears in the TV launcher.
+- [ ] Manifest: declare `android.hardware.touchscreen` and `android.software.leanback` as `required="false"` (via `android.manifest.intent_filters` / custom manifest template in buildozer).
+- [ ] Add a 320x180 px TV banner and reference it as `android:banner` on the application.
+- [x] Controls: on-screen touch buttons only on Android phones/tablets (not TV); hidden once a keyboard or gamepad is used, shown again on touch.
+- [x] Controls: D-pad centre / Enter / gamepad A / Space shoot (D-pad centre keycode is unverified on a real TV).
+- [x] Controls: main menu is navigable with D-pad / stick and Enter / A.
+- [x] Controls: Back / Escape returns to the main menu; from the menu it exits (desktop) or pauses the app (Android).
+- [x] Gamepad left stick, D-pad and buttons via SDL joystick events (button ids are Xbox-style defaults, untested on hardware).
+- [ ] Check HUD and object sizes on 1080p and 4K TV emulators.
+- [ ] Test on the Android Studio "Android TV (1080p)" emulator and a real device (Chromecast with Google TV, Nvidia Shield).
+- [ ] Play Console: opt in to the Android TV form factor, upload 1920x1080 TV screenshots; the app must be fully playable with D-pad / gamepad only.
+
+### Controls
+
+| Action | Keyboard | Gamepad | Touch |
+|---|---|---|---|
+| Turn | Left / Right or A / D | Left stick or D-pad | Left / Right buttons |
+| Thrust | Up or W | Stick up, D-pad up, B / Y | Up button |
+| Fire | Space or Enter | A / X | Fire button |
+| Menu | Escape / Back | Back / Start | - |
+
+Android TV remote D-pad arrives as arrow keys, centre button fires.
 
 ### Build for Android
 
