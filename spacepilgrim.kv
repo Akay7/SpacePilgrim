@@ -38,8 +38,6 @@
 
 
 <Spaceship>:
-    ship_stop: "images/ship_stop.png"
-    ship_fly: "images/ship_fly.png"
     size: 90, 90
 
     canvas.before:
@@ -51,16 +49,30 @@
         PopMatrix
 
     canvas:
+        Color:
+            rgba: 1, 1, 1, 1
         Ellipse:
-            source:
-                self.ship_fly if self.thrust else self.ship_stop
+            texture: self.texture_fly if self.thrust else self.texture_stop
             pos: self.pos
             size: self.size
 
 
 <SpaceshipStatus>:
     Label:
-        pos: Vector(*Window.size) - Vector(metrics.dp(260), 100)
+        # one player: top right; two players: in the middle of the player's
+        # side, between the joystick and the FIRE button, turned so that it
+        # reads right from the player's seat (the players sit at opposite
+        # sides of the screen: left player faces right, right player left)
+        center_x: metrics.cm(2.7) if root.side == 'left' else (Window.width - metrics.cm(2.7) if root.side == 'right' else Window.width - metrics.dp(210))
+        center_y: Window.height / 2 if root.side else Window.height - 50
+        canvas.before:
+            PushMatrix
+            Rotate:
+                angle: -90 if root.side == 'left' else (90 if root.side == 'right' else 0)
+                origin: self.center
+        canvas.after:
+            PopMatrix
+        color: root.color
         text: "Lives {:<5} Points {}".format(root.spaceship.lives, root.spaceship.points)
         font_size: "23dp"
         font_name: 'data/fonts/RobotoMono-Regular.ttf'
@@ -74,11 +86,11 @@
 
     Button:
         text: "Single player"
-        on_press: root.parent.game_start()
+        on_press: root.parent.show_ship_select(1)
 
     Button:
         text: "Multiplayer"
-        disabled: True
+        on_press: root.parent.show_ship_select(2)
 
     Button:
         text: "Settings"
@@ -92,7 +104,54 @@
 <SettingsScreen>:
     orientation: "vertical"
     spacing: metrics.dp(10)
-    size: metrics.dp(300), metrics.dp(420)
+    size: metrics.dp(300), metrics.dp(200)
+    pos: (Vector(*Window.size) - Vector(*self.size)) / 2
+
+    Button:
+        text: "Keyboard layout"
+        on_press: root.parent.show_keyboard_settings()
+
+    Button:
+        text: "Touch controls"
+        on_press: root.parent.show_touch_settings()
+
+    Button:
+        text: "Back"
+        on_press: root.parent.close_settings()
+
+
+<TouchSettingsScreen>:
+    orientation: "vertical"
+    spacing: metrics.dp(10)
+    size: metrics.dp(300), metrics.dp(240)
+    pos: (Vector(*Window.size) - Vector(*self.size)) / 2
+
+    Button:
+        id: btn_mode
+        on_press: root.parent.cycle_touch_mode()
+
+    Label:
+        id: lbl_scale
+        size_hint_y: 0.6
+
+    Slider:
+        id: slider_scale
+        min: 0.5
+        max: 4
+        step: 0.05
+        value: 1
+        on_value: root.set_scale(self.value)
+        on_touch_up: if self.collide_point(*args[1].pos): root.save_scale()
+
+    Button:
+        text: "Back"
+        on_press: root.parent.show_settings()
+
+
+<KeyboardSettings>:
+    orientation: "vertical"
+    spacing: metrics.dp(10)
+    size: metrics.dp(300), min(metrics.dp(470), Window.height - metrics.dp(10))
     pos: (Vector(*Window.size) - Vector(*self.size)) / 2
 
     Button:
@@ -112,12 +171,16 @@
         on_press: root.begin_rebind('fire')
 
     Button:
+        id: btn_player
+        on_press: root.switch_player()
+
+    Button:
         text: "Reset to defaults"
         on_press: root.reset()
 
     Button:
         text: "Back"
-        on_press: root.parent.close_settings()
+        on_press: root.parent.show_settings()
 
     Label:
         id: message
@@ -126,33 +189,6 @@
 
 <ScreenButtonsLayout>:
     size: Window.size
-    Button:
-        text: "Left"
-        on_press: root.parent.press('left')
-        on_release: root.parent.release('left')
-        pos: metrics.cm(0.5), metrics.cm(0.5)
-        size: metrics.cm(1), metrics.cm(1)
-
-    Button:
-        text: "Right"
-        on_press: root.parent.press('right')
-        on_release: root.parent.release('right')
-        pos: metrics.cm(2.5), metrics.cm(0.5)
-        size: metrics.cm(1), metrics.cm(1)
-
-    Button:
-        text: "Up"
-        on_press: root.parent.press('up')
-        on_release: root.parent.release('up')
-        pos: metrics.cm(1.5), metrics.cm(1.5)
-        size: metrics.cm(1), metrics.cm(1)
-
-    Button:
-        text: "Fire"
-        on_press: root.parent.press('fire')
-        on_release: root.parent.release('fire')
-        pos: root.size[0] - metrics.cm(1.5), metrics.cm(0.5)
-        size: metrics.cm(1), metrics.cm(1)
 
 
 <Background@Widget>:

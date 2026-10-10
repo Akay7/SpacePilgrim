@@ -1,5 +1,6 @@
 __version__ = "0.2.1"
 
+import colorsys
 import json
 import os
 from functools import partial
@@ -13,14 +14,21 @@ from kivy.app import App
 from kivy.uix.widget import Widget
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
+from kivy.uix.label import Label
 from kivy.properties import (
     ObjectProperty, NumericProperty, BooleanProperty, StringProperty,
     ListProperty,
 )
+from kivy.graphics import (
+    Color, Ellipse, Line, PopMatrix, PushMatrix, Rectangle, RoundedRectangle,
+    Rotate, Triangle,
+)
+from kivy.metrics import dp, cm
 from kivy.vector import Vector
 from kivy.clock import Clock
 
 from kivy.core.image import Image
+from kivy.graphics.texture import Texture
 
 
 # Window key codes (SDL2) -> actions. Android TV remote D-pad and a gamepad
@@ -36,12 +44,23 @@ RESERVED_KEY_ACTIONS = {
 
 # Rebindable gameplay keys are stored as SDL scancodes: the physical key,
 # independent of the keyboard layout (W stays W on a Russian layout).
+# Two players: player 1 on WASD + Space, player 2 on IJKL.
 DEFAULT_KEY_BINDINGS = {
     'up': [26],       # W
     'left': [4],      # A
     'right': [7],     # D
     'fire': [44],     # Space
 }
+DEFAULT_KEY_BINDINGS_P2 = {
+    'up': [12],       # I
+    'left': [13],     # J
+    'right': [15],    # L
+    'fire': [14],     # K
+}
+DEFAULT_PLAYER_KEYS = [DEFAULT_KEY_BINDINGS, DEFAULT_KEY_BINDINGS_P2]
+PLAYERS = len(DEFAULT_PLAYER_KEYS)
+# Used when a migrated player 1 set already took a default of player 2.
+FALLBACK_SCANCODES = [92, 93, 94, 96, 89, 90, 91, 95, 97]  # keypad 4 5 6 8 ...
 RESERVED_SCANCODES = {79, 80, 81, 82, 40, 88, 41}  # arrows, Enter, KP Enter, Esc
 ACTION_LABELS = {
     'up': 'Thrust',
@@ -83,51 +102,69 @@ def scancode_for(key, scancode=None):
 
 
 class KeyBindings:
-    """Configurable keyboard bindings (action -> scancodes), optionally
-    persisted as JSON."""
+    """Configurable keyboard bindings for two players (player -> action ->
+    scancodes), optionally persisted as JSON."""
 
-    VERSION = 2   # version 1 stored layout dependent key codes
+    VERSION = 3   # 2: one set for one player; 1: layout dependent key codes
 
     def __init__(self, path=None):
         self.path = path
-        self.keys = {a: list(k) for a, k in DEFAULT_KEY_BINDINGS.items()}
+        self.keys = self._defaults()
         self.load()
 
-    def label(self, action):
-        return ', '.join(scancode_name(sc) for sc in self.keys[action])
+    @staticmethod
+    def _defaults():
+        return [{a: list(k) for a, k in player.items()}
+                for player in DEFAULT_PLAYER_KEYS]
+
+    def label(self, action, player=0):
+        return ', '.join(
+            scancode_name(sc) for sc in self.keys[player][action])
+
+    def lookup(self, key, scancode=None):
+        """(player, action) of a key press; (None, action) for keys that
+        belong to no player (Escape), (None, None) for unbound keys. Arrow
+        keys and Enter are reserved for the menus and steer player 1."""
+        sc = scancode_for(key, scancode)
+        for player, actions in enumerate(self.keys):
+            for action, scancodes in actions.items():
+                if sc in scancodes:
+                    return player, action
+        action = RESERVED_KEY_ACTIONS.get(key)
+        if action in (None, 'back'):
+            return None, action
+        return 0, action
 
     def action_for(self, key, scancode=None):
-        sc = scancode_for(key, scancode)
-        for action, scancodes in self.keys.items():
-            if sc in scancodes:
-                return action
-        return RESERVED_KEY_ACTIONS.get(key)
+        return self.lookup(key, scancode)[1]
 
-    def rebind(self, action, key, scancode=None):
-        """Bind the physical key to `action`. Returns None on success or a
-        message saying why the key was refused (the old binding is kept)."""
+    def rebind(self, action, key, scancode=None, player=0):
+        """Bind the physical key to `action` of `player`. Returns None on
+        success or a message saying why the key was refused (the old binding
+        is kept)."""
         sc = scancode_for(key, scancode)
         if sc is None:
             return 'That key can not be used'
         if key in RESERVED_KEY_ACTIONS or sc in RESERVED_SCANCODES:
             return 'That key is reserved'
-        for other, scancodes in self.keys.items():
-            if other != action and sc in scancodes:
-                return 'Already used for {}'.format(ACTION_LABELS[other])
-        self.keys[action] = [sc]
+        for other_player, actions in enumerate(self.keys):
+            for other, scancodes in actions.items():
+                if (other_player, other) != (player, action) and sc in scancodes:
+                    who = ('' if other_player == player
+                           else 'Player {} '.format(other_player + 1))
+                    return 'Already used for {}{}'.format(
+                        who, ACTION_LABELS[other])
+        self.keys[player][action] = [sc]
         self.save()
 
     def reset(self):
-        self.keys = {a: list(k) for a, k in DEFAULT_KEY_BINDINGS.items()}
+        self.keys = self._defaults()
         self.save()
 
-    def _valid(self, data):
-        if not isinstance(data, dict) or data.get('version') != self.VERSION:
-            return False
-        keys = data.get('keys')
+    @staticmethod
+    def _valid_set(keys, seen):
         if not isinstance(keys, dict) or set(keys) != set(DEFAULT_KEY_BINDINGS):
             return False
-        seen = set()
         for scancodes in keys.values():
             if not isinstance(scancodes, list) or not scancodes:
                 return False
@@ -138,6 +175,23 @@ class KeyBindings:
                 seen.add(sc)
         return True
 
+    def _migrated(self, keys):
+        """Version 2 file: its set is player 1, player 2 gets the defaults
+        (or free keys where player 1 already uses a default)."""
+        seen = set()
+        if not self._valid_set(keys, seen):
+            return None
+        spare = [sc for sc in FALLBACK_SCANCODES if sc not in seen]
+        second = {}
+        for action, scancodes in DEFAULT_KEY_BINDINGS_P2.items():
+            if scancodes[0] in seen:
+                if not spare:
+                    return None
+                second[action] = [spare.pop(0)]
+            else:
+                second[action] = list(scancodes)
+        return [{a: list(k) for a, k in keys.items()}, second]
+
     def load(self):
         if not self.path:
             return
@@ -146,8 +200,22 @@ class KeyBindings:
                 data = json.load(f)
         except (OSError, ValueError):
             return
-        if self._valid(data):
-            self.keys = {a: list(data['keys'][a]) for a in DEFAULT_KEY_BINDINGS}
+        if not isinstance(data, dict):
+            return
+        if data.get('version') == 2:
+            keys = self._migrated(data.get('keys'))
+            if keys:
+                self.keys = keys
+            return
+        if data.get('version') != self.VERSION:
+            return
+        players = data.get('players')
+        if not isinstance(players, list) or len(players) != PLAYERS:
+            return
+        seen = set()
+        if all(self._valid_set(p, seen) for p in players):
+            self.keys = [
+                {a: list(p[a]) for a in DEFAULT_KEY_BINDINGS} for p in players]
 
     def save(self):
         if not self.path:
@@ -155,9 +223,61 @@ class KeyBindings:
         try:
             os.makedirs(os.path.dirname(self.path) or '.', exist_ok=True)
             with open(self.path, 'w') as f:
-                json.dump({'version': self.VERSION, 'keys': self.keys}, f)
+                json.dump({'version': self.VERSION, 'players': self.keys}, f)
         except OSError:
             pass  # keep the in-memory bindings for this session
+
+
+class TouchSettings:
+    """Whether the on-screen touch controls are shown: 'auto' (shown on
+    touch, hidden while a keyboard or gamepad is used), 'on' or 'off'.
+    Optionally persisted as JSON."""
+
+    MODES = ('auto', 'on', 'off')
+    MIN_SCALE, MAX_SCALE, SCALE_STEP = 0.5, 4.0, 0.05  # size of the controls
+
+    def __init__(self, path=None):
+        self.path = path
+        self.mode = 'auto'
+        self.scale = 1.0
+        self.load()
+
+    def cycle(self):
+        self.mode = self.MODES[(self.MODES.index(self.mode) + 1) % 3]
+        self.save()
+
+    def set_scale(self, value, save=True):
+        value = min(max(float(value), self.MIN_SCALE), self.MAX_SCALE)
+        self.scale = round(value / self.SCALE_STEP) * self.SCALE_STEP
+        if save:
+            self.save()
+
+    def load(self):
+        if not self.path:
+            return
+        try:
+            with open(self.path) as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return
+        if not isinstance(data, dict):
+            return
+        if data.get('mode') in self.MODES:
+            self.mode = data['mode']
+        scale = data.get('scale')
+        if (isinstance(scale, (int, float)) and not isinstance(scale, bool)
+                and self.MIN_SCALE <= scale <= self.MAX_SCALE):
+            self.set_scale(scale, save=False)
+
+    def save(self):
+        if not self.path:
+            return
+        try:
+            os.makedirs(os.path.dirname(self.path) or '.', exist_ok=True)
+            with open(self.path, 'w') as f:
+                json.dump({'mode': self.mode, 'scale': self.scale}, f)
+        except OSError:
+            pass  # keep the in-memory setting for this session
 
 
 # Default gamepad layout (SDL joystick button ids, Xbox-style pad):
@@ -169,6 +289,107 @@ JOY_BUTTON_ACTIONS = {
     6: 'back', 7: 'back',
 }
 JOY_AXIS_DEADZONE = 0.5
+
+
+# Cabin colours: name -> hue in degrees. The sprite's canopy is blue (~210).
+CABIN_COLORS = {
+    'blue': 210, 'green': 120, 'red': 0, 'yellow': 55,
+    'purple': 285, 'orange': 28,
+}
+CABIN_NAMES = list(CABIN_COLORS)
+DEFAULT_CABINS = ['blue', 'green']
+CABIN_SOURCE_HUE = 210
+SHIP_IMAGES = ('images/ship_stop.png', 'images/ship_fly.png')
+
+
+def cabin_rgb(name):
+    """Colour used for HUD text and previews of a cabin colour."""
+    return colorsys.hsv_to_rgb(CABIN_COLORS[name] / 360, 0.7, 1)
+
+
+def recolor_cabin(rgba, hue):
+    """RGBA bytes with the blue canopy shifted to `hue` (degrees); hull,
+    wings and engine flame keep their colours."""
+    shift = (hue - CABIN_SOURCE_HUE) / 360
+    out = bytearray(rgba)
+    if not shift:
+        return bytes(out)
+    for i in range(0, len(out), 4):
+        if out[i + 3] < 16:
+            continue
+        h, sat, val = colorsys.rgb_to_hsv(
+            out[i] / 255, out[i + 1] / 255, out[i + 2] / 255)
+        if 0.5 < h < 0.7 and sat > 0.35 and val > 0.3:
+            r, g, b = colorsys.hsv_to_rgb((h + shift) % 1, sat, val)
+            out[i:i + 3] = bytes((round(r * 255), round(g * 255), round(b * 255)))
+    return bytes(out)
+
+
+_cabin_textures = {}
+
+
+def cabin_textures(name):
+    """(stopped, flying) textures of the ship with the given cabin colour,
+    made once and cached."""
+    if name not in _cabin_textures:
+        pair = []
+        for path in SHIP_IMAGES:
+            image = Image(path, keep_data=True)
+            data = image.image._data[0]
+            if data.fmt != 'rgba' or name == 'blue':
+                pair.append(image.texture)
+                continue
+            pixels = recolor_cabin(data.data, CABIN_COLORS[name])
+            texture = Texture.create(size=(data.width, data.height))
+            texture.blit_buffer(pixels, colorfmt='rgba', bufferfmt='ubyte')
+            texture.flip_vertical()
+            pair.append(texture)
+        _cabin_textures[name] = tuple(pair)
+    return _cabin_textures[name]
+
+
+class ShipColors:
+    """Cabin colour chosen by each player, optionally persisted as JSON."""
+
+    def __init__(self, path=None):
+        self.path = path
+        self.colors = list(DEFAULT_CABINS)
+        self.load()
+
+    def cycle(self, player, step, players=PLAYERS):
+        """Next (step 1) / previous colour for `player`, skipping colours
+        another player of this game already has."""
+        taken = {c for i, c in enumerate(self.colors[:players]) if i != player}
+        index = CABIN_NAMES.index(self.colors[player])
+        for _ in CABIN_NAMES:
+            index = (index + step) % len(CABIN_NAMES)
+            if CABIN_NAMES[index] not in taken:
+                self.colors[player] = CABIN_NAMES[index]
+                return
+
+    def load(self):
+        if not self.path:
+            return
+        try:
+            with open(self.path) as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return
+        colors = data.get('colors') if isinstance(data, dict) else None
+        if (isinstance(colors, list) and len(colors) == PLAYERS
+                and all(c in CABIN_COLORS for c in colors)
+                and len(set(colors)) == PLAYERS):
+            self.colors = list(colors)
+
+    def save(self):
+        if not self.path:
+            return
+        try:
+            os.makedirs(os.path.dirname(self.path) or '.', exist_ok=True)
+            with open(self.path, 'w') as f:
+                json.dump({'colors': self.colors}, f)
+        except OSError:
+            pass  # keep the in-memory choice for this session
 
 
 def is_android_tv():
@@ -255,7 +476,19 @@ class Spaceship(Widget):
     angle = NumericProperty(0)
     angle_rotation = NumericProperty(0)
     rotate = StringProperty()
+    cabin = StringProperty('blue')
+    texture_stop = ObjectProperty(None, allownone=True)
+    texture_fly = ObjectProperty(None, allownone=True)
     sound = SoundLoader.load('sounds/engine.ogg')
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.bind(cabin=self._set_cabin)
+        self._set_cabin()
+
+    def _set_cabin(self, *args):
+        name = self.cabin if self.cabin in CABIN_COLORS else 'blue'
+        self.texture_stop, self.texture_fly = cabin_textures(name)
 
     def update(self, dt):
         for i in [0, 1]:
@@ -307,15 +540,24 @@ class Spaceship(Widget):
 
 class SpaceshipStatus(Widget):
     spaceship = ObjectProperty()
+    side = StringProperty('')           # two players: 'left' / 'right'
+    color = ListProperty([1, 1, 1, 1])  # tint of the text: the cabin colour
 
 
 class ButtonColumn(BoxLayout):
     """Vertical list of buttons that can be navigated with the keyboard."""
     selected = NumericProperty(0)
+    waiting = ''   # action waiting for a key (settings pages that rebind)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.highlight()
+
+    def refresh(self, message=''):
+        pass
+
+    def adjust(self, step):
+        """Left / right on a page with a slider."""
 
     @property
     def buttons(self):
@@ -344,9 +586,59 @@ class Menu(ButtonColumn):
 
 
 class SettingsScreen(ButtonColumn):
-    """Controls settings: pick an action, then press the new key."""
+    """Settings hub: Keyboard layout / Touch controls."""
+
+    def go_back(self):
+        self.parent.close_settings()
+
+
+class TouchSettingsScreen(ButtonColumn):
+    """Touch controls: when they are shown and how big they are."""
+    touch_settings = ObjectProperty(None, allownone=True)
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.refresh()
+
+    def refresh(self, message=''):
+        ids = self.ids
+        if self.touch_settings is None or 'slider_scale' not in ids:
+            return
+        ids['btn_mode'].text = 'Touch controls: {}'.format(
+            self.touch_settings.mode.capitalize())
+        percent = round(self.touch_settings.scale * 100)
+        ids['lbl_scale'].text = 'Size: {}%'.format(percent)
+        slider = ids['slider_scale']
+        if abs(slider.value - self.touch_settings.scale) > 1e-6:
+            slider.value = self.touch_settings.scale
+
+    def set_scale(self, value):
+        """Slider moved: remember in memory, saved when the finger lifts."""
+        if self.touch_settings is None:
+            return
+        self.touch_settings.set_scale(value, save=False)
+        self.refresh()
+
+    def save_scale(self):
+        if self.touch_settings is not None:
+            self.touch_settings.save()
+
+    def adjust(self, step):
+        if self.touch_settings is None:
+            return
+        self.touch_settings.set_scale(
+            self.touch_settings.scale + step * 0.1)
+        self.refresh()
+
+    def go_back(self):
+        self.parent.show_settings()
+
+
+class KeyboardSettings(ButtonColumn):
+    """Keyboard layout: pick an action, then press the new key."""
     bindings = ObjectProperty()
     waiting = StringProperty('')   # action waiting for a key, '' if none
+    player = NumericProperty(0)    # whose keys are listed and rebound
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -360,9 +652,18 @@ class SettingsScreen(ButtonColumn):
             if self.waiting == action:
                 value = 'press a key...'
             else:
-                value = self.bindings.label(action)
+                value = self.bindings.label(action, self.player)
             ids['btn_' + action].text = '{}: {}'.format(label, value)
+        ids['btn_player'].text = 'Keys of: Player {}'.format(self.player + 1)
         ids['message'].text = message
+
+    def switch_player(self):
+        self.waiting = ''
+        self.player = (self.player + 1) % PLAYERS
+        self.refresh()
+
+    def go_back(self):
+        self.parent.show_settings()
 
     def begin_rebind(self, action):
         self.waiting = action
@@ -381,7 +682,8 @@ class SettingsScreen(ButtonColumn):
         if key == 27:
             self.refresh()
         else:
-            error = self.bindings.rebind(action, key, scancode)
+            error = self.bindings.rebind(
+                action, key, scancode, player=self.player)
             self.refresh(error or '')
         return True
 
@@ -391,24 +693,299 @@ class SettingsScreen(ButtonColumn):
         self.refresh()
 
 
+class FireButton(Widget):
+    """Square red button labelled FIRE, like on arcade shooters."""
+    action = StringProperty('fire')
+    pressed = BooleanProperty(False)
+    text_angle = NumericProperty(0)   # turns the label toward the player
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._touches = set()
+        with self.canvas:
+            self._fill_color = Color(0.85, 0.1, 0.1, 0.6)
+            self._fill = RoundedRectangle(radius=[dp(10)])
+            Color(1, 1, 1, 0.85)
+            self._border = Line(width=dp(1.5))
+        self._label = Label(
+            text='FIRE', bold=True, color=(1, 1, 1, 1), size_hint=(None, None))
+        with self._label.canvas.before:
+            PushMatrix()
+            self._label_turn = Rotate()
+        with self._label.canvas.after:
+            PopMatrix()
+        self.add_widget(self._label)
+        self.bind(pos=self._redraw, size=self._redraw, pressed=self._redraw,
+                  text_angle=self._redraw)
+        self._redraw()
+
+    def _redraw(self, *args):
+        x, y = self.pos
+        w, h = self.size
+        self._fill_color.a = 0.9 if self.pressed else 0.6
+        self._fill.pos, self._fill.size = self.pos, self.size
+        self._border.rounded_rectangle = (x, y, w, h, dp(10))
+        self._label.size = self.size
+        self._label.pos = self.pos
+        self._label.font_size = max(w * 0.26, dp(10))
+        self._label_turn.origin = self.center
+        self._label_turn.angle = self.text_angle
+
+    def _grab(self, touch):
+        touch.grab(self)
+        self._touches.add(touch.uid)
+        if len(self._touches) == 1:
+            self.pressed = True
+            self.parent.press(self.action)
+
+    def _drop(self, touch):
+        if touch.uid not in self._touches:
+            return
+        touch.ungrab(self)
+        self._touches.discard(touch.uid)
+        if not self._touches:
+            self.pressed = False
+            self.parent.release(self.action)
+
+    def cancel(self):
+        """Release the button, e.g. when the overlay is hidden mid-press."""
+        if self._touches:
+            self._touches.clear()
+            self.pressed = False
+            self.parent.release(self.action)
+
+    def on_touch_down(self, touch):
+        if not self.parent.active or not self.collide_point(*touch.pos):
+            return False
+        self._grab(touch)
+        return True
+
+    def on_touch_move(self, touch):
+        if touch.grab_current is self and not self.collide_point(*touch.pos):
+            self._drop(touch)
+        return touch.grab_current is self
+
+    def on_touch_up(self, touch):
+        if touch.grab_current is self:
+            self._drop(touch)
+            return True
+        return False
+
+
+MARGIN_CM = 1.0   # space between the touch controls and the screen edges
+
+
+class Joystick(Widget):
+    """Virtual stick: drag the knob up (thrust), left or right; positions in
+    between press two actions at once. Down and the centre do nothing."""
+    THRESHOLD = 0.35        # share of the radius needed to trigger an action
+    knob = ListProperty([0.0, 0.0])   # offset from the centre, -1..1
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._touch = None
+        self._held = set()
+        with self.canvas:
+            Color(1, 1, 1, 0.15)
+            self._base = Ellipse()
+            Color(1, 1, 1, 0.6)
+            self._ring = Line(width=dp(1.5))
+            Color(1, 1, 1, 0.45)
+            self._marks = [Triangle() for _ in range(3)]
+            self._knob_color = Color(1, 1, 1, 0.35)
+            self._knob = Ellipse()
+            Color(1, 1, 1, 0.9)
+            self._knob_ring = Line(width=dp(1.5))
+        self.bind(pos=self._redraw, size=self._redraw, knob=self._redraw)
+        self._redraw()
+
+    @property
+    def knob_size(self):
+        return self.width * 0.42
+
+    def _redraw(self, *args):
+        cx, cy = self.center
+        r = self.width / 2
+        self._base.pos, self._base.size = self.pos, self.size
+        self._ring.circle = (cx, cy, r - dp(1))
+        k = r * 0.1
+        for mark, (dx, dy) in zip(self._marks, ((0, 1), (-1, 0), (1, 0))):
+            mx, my = cx + dx * r * 0.82, cy + dy * r * 0.82
+            px, py = -dy, dx          # perpendicular
+            mark.points = [
+                mx + dx * k, my + dy * k,
+                mx - dx * k + px * k, my - dy * k + py * k,
+                mx - dx * k - px * k, my - dy * k - py * k,
+            ]
+        reach = r - self.knob_size / 2
+        kx = cx + self.knob[0] * reach
+        ky = cy + self.knob[1] * reach
+        self._knob_color.a = 0.55 if self._touch is not None else 0.35
+        self._knob.size = (self.knob_size, self.knob_size)
+        self._knob.pos = (kx - self.knob_size / 2, ky - self.knob_size / 2)
+        self._knob_ring.circle = (kx, ky, self.knob_size / 2 - dp(1))
+
+    def collide_point(self, x, y):
+        r = self.width / 2
+        return (x - self.center_x) ** 2 + (y - self.center_y) ** 2 <= r * r
+
+    def _follow(self, pos):
+        r = max(self.width / 2, 1)
+        dx = (pos[0] - self.center_x) / r
+        dy = (pos[1] - self.center_y) / r
+        length = (dx * dx + dy * dy) ** 0.5
+        if length > 1:
+            dx, dy = dx / length, dy / length
+        self.knob = [dx, dy]
+        t = self.THRESHOLD
+        wanted = set()
+        if dx < -t:
+            wanted.add('left')
+        if dx > t:
+            wanted.add('right')
+        if dy > t:
+            wanted.add('up')
+        self._apply(wanted)
+
+    def _apply(self, wanted):
+        for action in self._held - wanted:
+            self.parent.release(action)
+        for action in wanted - self._held:
+            self.parent.press(action)
+        self._held = wanted
+
+    def cancel(self):
+        """Recentre and release everything, e.g. when the pad is hidden."""
+        if self._touch is not None:
+            self._touch.ungrab(self)
+            self._touch = None
+        self._apply(set())
+        self.knob = [0.0, 0.0]
+
+    def on_touch_down(self, touch):
+        if (self._touch is not None or not self.parent.active
+                or not self.collide_point(*touch.pos)):
+            return False
+        touch.grab(self)
+        self._touch = touch
+        self._follow(touch.pos)
+        return True
+
+    def on_touch_move(self, touch):
+        if touch.grab_current is self and touch is self._touch:
+            self._follow(touch.pos)
+            return True
+        return False
+
+    def on_touch_up(self, touch):
+        if touch.grab_current is self and touch is self._touch:
+            self.cancel()
+            return True
+        return False
+
+
 class ScreenButtonsLayout(Widget):
-    pass
+    """Touch overlay: joystick bottom-left, fire bottom-right. A hidden
+    layout lets all touches through."""
+    active = BooleanProperty(True)
+    side = StringProperty('')    # '' whole screen; 'left' / 'right' half
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.scale = 1.0
+        self.stick = Joystick(size=(cm(3.4), cm(3.4)), size_hint=(None, None))
+        self.add_widget(self.stick)
+        self.fire = FireButton(size=(cm(2), cm(2)), size_hint=(None, None))
+        self.add_widget(self.fire)
+        self.bind(size=self._layout)
+        self._layout()
+
+    def set_scale(self, scale):
+        self.scale = scale
+        self._layout()
+
+    def _layout(self, *args):
+        # keep a margin to the screen edges; controls are never larger than
+        # the window height and half its width allow, so they do not overlap
+        margin = cm(MARGIN_CM)
+        if self.side:
+            self._layout_side(margin)
+            return
+        limit = max(min(self.height - margin - cm(0.5),
+                        self.width / 2 - margin * 1.5), cm(1))
+        side = min(cm(3.4) * self.scale, limit)
+        self.stick.size = (side, side)
+        side = min(cm(2) * self.scale, limit)
+        self.fire.size = (side, side)
+        self.stick.pos = (margin, margin)
+        self.fire.pos = (self.width - margin - self.fire.width, margin)
+
+    def _layout_side(self, margin):
+        """Two players sit on opposite sides with the screen between them:
+        each has the two controls at the two ends of their own side of the
+        screen, joystick under the left hand and FIRE under the right hand
+        as seen from their seat. Player 1 (left side, facing right) has the
+        joystick at the top and FIRE in the bottom corner; player 2 (right
+        side, facing left) FIRE at the top and the joystick in the bottom
+        corner, so the two sides are the same turned half a circle. The top
+        control sits just below the status text."""
+        gap = cm(0.3)
+        top_room = cm(2)
+        stick, fire = cm(3.4) * self.scale, cm(2) * self.scale
+        room_h = max(self.height - margin - top_room - gap, cm(2))
+        shrink = min(1.0, room_h / (stick + fire))
+        room_w = max(self.width / 2 - margin * 2, cm(1))
+        stick = max(min(stick * shrink, room_w), cm(1))
+        fire = max(min(fire * shrink, room_w), cm(1))
+        self.stick.size = (stick, stick)
+        self.fire.size = (fire, fire)
+        top = self.height - top_room
+        # the FIRE label reads upright from the player's seat
+        self.fire.text_angle = -90 if self.side == 'left' else 90
+        if self.side == 'left':
+            x = margin
+            self.stick.pos = (x, top - stick)
+            self.fire.pos = (x + (stick - fire) / 2, margin)
+        else:
+            x = self.width - margin - stick
+            self.stick.pos = (x, margin)
+            self.fire.pos = (x + (stick - fire) / 2, top - fire)
+
+    def press(self, action):
+        if self.parent is not None:
+            self.parent.press(action)
+
+    def release(self, action):
+        if self.parent is not None:
+            self.parent.release(action)
+
+    def set_active(self, active):
+        self.active = active
+        self.opacity = 1 if active else 0
+        if not active:
+            self.stick.cancel()
+            self.fire.cancel()
+
+    def on_touch_down(self, touch):
+        if not self.active:
+            return False
+        return super().on_touch_down(touch)
 
 
 class ControlsManager(Widget):
     """Turns abstract actions (up, left, right, fire) into spaceship
     commands. Actions come from keyboard, gamepad and on-screen buttons."""
     spaceship = ObjectProperty()
+    side = StringProperty('')   # touch controls: '', 'left' or 'right' half
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.held = set()
-        self.touch_buttons = ScreenButtonsLayout()
+        self.touch_buttons = ScreenButtonsLayout(side=self.side)
         self.add_widget(self.touch_buttons)
 
     def show_touch_buttons(self, visible):
-        self.touch_buttons.opacity = 1 if visible else 0
-        self.touch_buttons.disabled = not visible
+        self.touch_buttons.set_active(visible)
 
     def press(self, action):
         if action in self.held:
@@ -437,6 +1014,98 @@ class ControlsManager(Widget):
             spaceship.turn_right()
         else:
             spaceship.stop_rotation()
+
+
+class ShipPreview(Widget):
+    """The ship of a player, drawn large, in the chosen cabin colour."""
+    texture = ObjectProperty(None, allownone=True)
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        with self.canvas:
+            Color(1, 1, 1, 1)
+            self._rect = Rectangle()
+        self.bind(pos=self._redraw, size=self._redraw, texture=self._redraw)
+
+    def _redraw(self, *args):
+        side = min(self.size)
+        self._rect.texture = self.texture
+        self._rect.size = (side, side)
+        self._rect.pos = (self.center_x - side / 2, self.center_y - side / 2)
+
+
+class ShipSelectScreen(BoxLayout):
+    """Pick the cabin colour of each player's ship and see it before the
+    game starts. Everyone presses ready to begin."""
+
+    def __init__(self, colors, players=1, **kwargs):
+        super().__init__(orientation='vertical', spacing=dp(10), **kwargs)
+        self.ship_colors = colors
+        self.players = players
+        self.ready = [False] * players
+        self.size = (dp(260) * players + dp(20), dp(330))
+        self.panels = []
+        row = BoxLayout(spacing=dp(10))
+        for player in range(players):
+            row.add_widget(self._panel(player))
+        self.add_widget(row)
+        self.back_button = Button(
+            text='Back', size_hint_y=None, height=dp(48),
+            on_press=lambda *a: self.go_back())
+        self.add_widget(self.back_button)
+        self.bind(size=self._center, parent=self._center)
+        self._center()
+        self.refresh()
+
+    def _center(self, *args):
+        self.pos = ((Window.width - self.width) / 2,
+                    (Window.height - self.height) / 2)
+
+    def _panel(self, player):
+        panel = BoxLayout(orientation='vertical', spacing=dp(6))
+        title = Label(text='Player {}'.format(player + 1), size_hint_y=None,
+                      height=dp(30), bold=True)
+        preview = ShipPreview()
+        name = Label(size_hint_y=None, height=dp(28))
+        buttons = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(6))
+        prev = Button(text='<', size_hint_x=0.25,
+                      on_press=lambda *a: self.change(player, -1))
+        ready = Button(on_press=lambda *a: self.toggle_ready(player))
+        nxt = Button(text='>', size_hint_x=0.25,
+                     on_press=lambda *a: self.change(player, 1))
+        for widget in (prev, ready, nxt):
+            buttons.add_widget(widget)
+        for widget in (title, preview, name, buttons):
+            panel.add_widget(widget)
+        self.panels.append({
+            'title': title, 'preview': preview, 'name': name,
+            'ready': ready, 'prev': prev, 'next': nxt})
+        return panel
+
+    def refresh(self):
+        for player, panel in enumerate(self.panels):
+            color = self.ship_colors.colors[player]
+            panel['preview'].texture = cabin_textures(color)[0]
+            panel['title'].color = (*cabin_rgb(color), 1)
+            panel['name'].text = color.capitalize()
+            panel['ready'].text = 'Ready!' if self.ready[player] else 'Ready?'
+
+    def change(self, player, step):
+        """Next / previous colour for `player`, until they are ready."""
+        if self.ready[player]:
+            return
+        self.ship_colors.cycle(player, step, self.players)
+        self.refresh()
+
+    def toggle_ready(self, player):
+        self.ready[player] = not self.ready[player]
+        self.refresh()
+        if all(self.ready) and self.parent is not None:
+            self.parent.start_selected()
+
+    def go_back(self):
+        if self.parent is not None:
+            self.parent.close_ship_select()
 
 
 class AnimatedBackground(Widget):
@@ -480,15 +1149,25 @@ class SpacePilgrimGame(Widget):
         self.frame_schedule = Clock.schedule_interval(self.update, 1.0/60.0)
         self.asteroid_schedule = Clock.schedule_interval(self.generate_asteroid, 2)
 
-        # On-screen buttons only for touch devices (not TV); they hide as soon
-        # as a keyboard or gamepad is used and come back on the next touch.
-        self.touchscreen = platform == 'android' and not is_android_tv()
-        self.touch_ui = self.touchscreen
-        self._inputs_down = set()
+        # On-screen controls: shown at start only on Android phones/tablets,
+        # on any device as soon as it is touched, and hidden again when a
+        # keyboard or gamepad is used. Settings can force them on or off.
         app = App.get_running_app()
+        self.touch_settings = TouchSettings(
+            os.path.join(app.user_data_dir, 'touch_ui.json')
+            if app else None)
+        self.touch_ui = self._touch_visibility(
+            platform == 'android' and not is_android_tv())
+        self._inputs_down = set()
         self.bindings = KeyBindings(
             os.path.join(app.user_data_dir, 'keybindings.json')
             if app else None)
+        self.ship_colors = ShipColors(
+            os.path.join(app.user_data_dir, 'ship_colors.json')
+            if app else None)
+        self.num_players = 1
+        self.controls = []   # one ControlsManager per player, None once out
+        self._pads = {}      # gamepad (SDL stick id) -> player
         Window.bind(
             on_key_down=self._on_key_down,
             on_key_up=self._on_key_up,
@@ -500,7 +1179,9 @@ class SpacePilgrimGame(Widget):
             on_touch_down=self._on_window_touch,
         )
 
-    def game_start(self):
+    def game_start(self, players=1, colors=None):
+        """Start a game of `players` ships with the given cabin colours
+        (default: the saved choice)."""
         # reset game status
         [self.remove_shot(shot) for shot in self.shots]
         [self.remove_asteroid(asteroid) for asteroid in self.asteroids]
@@ -512,31 +1193,70 @@ class SpacePilgrimGame(Widget):
         self.asteroid_schedule = Clock.schedule_interval(self.generate_asteroid, 2)
 
         self.remove_widget(self.menu)
-        spaceship = self.add_spaceship()
+        if self.select_active:
+            self.remove_widget(self.select)
+            del self.select
+        colors = list(colors or self.ship_colors.colors)[:players]
+        self.num_players = players
 
-        self.spaceship_status = SpaceshipStatus(spaceship=spaceship)
-        self.add_widget(self.spaceship_status)
-        self.spaceship_controls = ControlsManager(spaceship=spaceship)
-        self.spaceship_controls.show_touch_buttons(self.touch_ui)
-        self.add_widget(self.spaceship_controls)
+        self.statuses = []
+        self.controls = []
+        for player in range(players):
+            spaceship = self.add_spaceship(player, players, colors[player])
+            status = SpaceshipStatus(
+                spaceship=spaceship,
+                side=('left', 'right')[player] if players > 1 else '',
+                color=(*cabin_rgb(colors[player]), 1))
+            self.add_widget(status)
+            self.statuses.append(status)
+            controls = ControlsManager(
+                spaceship=spaceship,
+                side=('left', 'right')[player] if players > 1 else '')
+            controls.touch_buttons.set_scale(self.touch_settings.scale)
+            controls.show_touch_buttons(self.touch_ui)
+            self.add_widget(controls)
+            self.controls.append(controls)
+        self.spaceship_status = self.statuses[0]
+        self.spaceship_controls = self.controls[0]
         self._inputs_down.clear()
 
     # ---- input routing -------------------------------------------------
 
-    def _set_touch_ui(self, visible):
-        visible = visible and self.touchscreen
-        if visible != self.touch_ui:
+    def _touch_visibility(self, auto_visible):
+        mode = self.touch_settings.mode
+        if mode == 'auto':
+            return auto_visible
+        return mode == 'on'
+
+    def cycle_touch_mode(self):
+        self.touch_settings.cycle()
+        self._set_touch_ui(self.touch_ui, force=True)
+        if self.settings_active:
+            self.settings.refresh()
+
+    def _set_touch_ui(self, visible, force=False):
+        visible = self._touch_visibility(visible)
+        if force or visible != self.touch_ui:
             self.touch_ui = visible
-            controls = getattr(self, 'spaceship_controls', None)
-            if controls is not None:
-                controls.show_touch_buttons(visible)
+            for controls in self.controls:
+                if controls is not None:
+                    controls.show_touch_buttons(visible)
 
     def _on_window_touch(self, window, touch):
         self._set_touch_ui(True)
 
-    def _input(self, source, action, pressed):
+    def _input(self, source, action, pressed, player=None):
         """Send a press/release of `action` coming from `source` (a hashable
-        id of the physical key/button/axis) to the menu or the game."""
+        id of the physical key/button/axis) of `player` (None: unknown or
+        not tied to a player) to the menu or the game."""
+        in_game = not (self.settings_active or self.menu_active
+                       or self.select_active)
+        controls = None
+        if in_game and action != 'back':
+            controls = self._controls_of(player)
+            if controls is None:
+                return    # a key of a second player in a one player game
+
         if pressed:
             if source in self._inputs_down:
                 return  # key auto-repeat
@@ -554,10 +1274,28 @@ class SpacePilgrimGame(Widget):
                 self.settings.move(-1)
             elif action == 'down':
                 self.settings.move(1)
+            elif action == 'left':
+                self.settings.adjust(-1)
+            elif action == 'right':
+                self.settings.adjust(1)
             elif action == 'fire':
                 self.settings.activate()
             elif action == 'back':
-                self.close_settings()
+                self.settings.go_back()
+        elif self.select_active:
+            if not pressed:
+                return
+            if self.select.players == 1:
+                player = 0
+            if action == 'back':
+                self.select.go_back()
+            elif player is not None and player < self.select.players:
+                if action == 'left':
+                    self.select.change(player, -1)
+                elif action == 'right':
+                    self.select.change(player, 1)
+                elif action == 'fire':
+                    self.select.toggle_ready(player)
         elif self.menu_active:
             if not pressed:
                 return
@@ -573,27 +1311,77 @@ class SpacePilgrimGame(Widget):
         elif action == 'back':
             if pressed:
                 self.game_stop()
-        else:
-            controls = getattr(self, 'spaceship_controls', None)
-            if controls is None:
-                return
+        elif controls is not None:
             if pressed:
                 controls.press(action)
             else:
                 controls.release(action)
+
+    def _controls_of(self, player):
+        if player is None or player >= len(self.controls):
+            return None
+        return self.controls[player]
+
+    def _joy_player(self, stick, assign=True):
+        """Player of a gamepad: with two players the first pad that sends
+        input is player 1 and the second one player 2; with one player every
+        pad drives the ship. None for any further pad."""
+        if self.num_players == 1:
+            return 0
+        if stick not in self._pads and assign and len(self._pads) < PLAYERS:
+            self._pads[stick] = len(self._pads)
+        return self._pads.get(stick)
 
     @property
     def menu_active(self):
         return hasattr(self, 'menu') and self.menu in self.children
 
     @property
+    def select_active(self):
+        return hasattr(self, 'select') and self.select in self.children
+
+    @property
     def settings_active(self):
         return hasattr(self, 'settings') and self.settings in self.children
 
+    def _show_settings_page(self, page):
+        if self.settings_active:
+            self.remove_widget(self.settings)
+        else:
+            self.remove_widget(self.menu)
+        self.settings = page
+        self.add_widget(page)
+
     def show_settings(self):
+        self._show_settings_page(SettingsScreen())
+
+    def show_keyboard_settings(self):
+        self._show_settings_page(KeyboardSettings(bindings=self.bindings))
+
+    def show_touch_settings(self):
+        self._show_settings_page(
+            TouchSettingsScreen(touch_settings=self.touch_settings))
+
+    def show_ship_select(self, players):
+        """Ship selection before a game of `players` ships."""
+        self.num_players = players
+        self._pads.clear()
         self.remove_widget(self.menu)
-        self.settings = SettingsScreen(bindings=self.bindings)
-        self.add_widget(self.settings)
+        self.select = ShipSelectScreen(self.ship_colors, players)
+        self.add_widget(self.select)
+
+    def start_selected(self):
+        self.ship_colors.save()
+        players = self.select.players
+        self.game_start(players, self.ship_colors.colors[:players])
+
+    def close_ship_select(self):
+        self.remove_widget(self.select)
+        del self.select
+        self.add_widget(self.menu)
+        self.menu.highlight()
+        self._pads.clear()
+        self.num_players = 1
 
     def close_settings(self):
         self.remove_widget(self.settings)
@@ -607,29 +1395,41 @@ class SpacePilgrimGame(Widget):
             self._inputs_down.add(('key', key))
             self.settings.handle_key(key, scancode)
             return
-        action = self.bindings.action_for(key, scancode)
+        # Kivy dispatches on_keyboard right after this handler, by which time
+        # Back may already have closed the game or settings; remember where
+        # the key went down so _on_keyboard judges the screen it was meant for.
+        self._back_from_menu = self.menu_active and not self.settings_active
+        player, action = self.bindings.lookup(key, scancode)
         if action:
-            self._input(('key', key), action, True)
+            self._input(('key', key), action, True, player)
 
     def _on_key_up(self, window, key, scancode=None, *args):
-        action = self.bindings.action_for(key, scancode)
+        player, action = self.bindings.lookup(key, scancode)
         if action:
-            self._input(('key', key), action, False)
+            self._input(('key', key), action, False, player)
         else:
             self._inputs_down.discard(('key', key))
 
     def _on_keyboard(self, window, key, *args):
         # Stop Kivy from quitting on Escape / pausing on Android Back while
         # playing: Back returns to the menu instead.
-        if key == 27 and not (platform == 'android' and self.menu_active):
+        on_menu = getattr(self, '_back_from_menu', None)
+        if on_menu is None:
+            on_menu = self.menu_active
+        self._back_from_menu = None
+        if key == 27 and not (platform == 'android' and on_menu):
             return True
 
+    def _joy_input(self, stick, source, action, pressed):
+        player = self._joy_player(stick, assign=pressed)
+        self._input(source, action, pressed, player)
+
     def _axis(self, stick, axis, value, negative, positive):
-        self._input(
-            ('axis', stick, axis, negative), negative,
+        self._joy_input(
+            stick, ('axis', stick, axis, negative), negative,
             value < -JOY_AXIS_DEADZONE)
-        self._input(
-            ('axis', stick, axis, positive), positive,
+        self._joy_input(
+            stick, ('axis', stick, axis, positive), positive,
             value > JOY_AXIS_DEADZONE)
 
     def _on_joy_axis(self, window, stick, axis, value):
@@ -647,12 +1447,12 @@ class SpacePilgrimGame(Widget):
     def _on_joy_button_down(self, window, stick, button):
         action = JOY_BUTTON_ACTIONS.get(button)
         if action:
-            self._input(('button', stick, button), action, True)
+            self._joy_input(stick, ('button', stick, button), action, True)
 
     def _on_joy_button_up(self, window, stick, button):
         action = JOY_BUTTON_ACTIONS.get(button)
         if action:
-            self._input(('button', stick, button), action, False)
+            self._joy_input(stick, ('button', stick, button), action, False)
 
     def game_stop(self):
         self.menu = Menu()
@@ -661,38 +1461,67 @@ class SpacePilgrimGame(Widget):
         for spaceship in list(self.spaceships):
             self.remove_spaceship(spaceship)
 
-        if hasattr(self, 'spaceship_status'):
-            self.remove_widget(self.spaceship_status)
-        if hasattr(self, 'spaceship_controls'):
-            self.remove_widget(self.spaceship_controls)
-            del self.spaceship_controls
+        for status in getattr(self, 'statuses', []):
+            self.remove_widget(status)
+        self.statuses = []
+        for controls in self.controls:
+            if controls is not None:
+                self.remove_widget(controls)
+        self.controls = []
+        for name in ('spaceship_status', 'spaceship_controls'):
+            if hasattr(self, name):
+                delattr(self, name)
         self._inputs_down.clear()
+        self._pads.clear()
+        self.num_players = 1
 
     def update(self, dt):
         [spaceship.update(dt) for spaceship in self.spaceships]
         [shot.update(dt) for shot in self.shots]
         [asteroid.update(dt) for asteroid in self.asteroids]
 
-        for asteroid in self.asteroids:
-            for spaceship in self.spaceships:
-                if asteroid.collide_widget(spaceship):
-                    self.remove_asteroid(asteroid)
-                    spaceship.lives -= 1
-                    self.add_explosion(asteroid.pos)
-                    if spaceship.lives == 0:
-                        self.game_stop()
-                        self.add_explosion(spaceship.pos)
-            for shot in self.shots:
+        for asteroid in list(self.asteroids):
+            hit = next((spaceship for spaceship in self.spaceships
+                        if asteroid.collide_widget(spaceship)), None)
+            if hit is not None:
+                self.remove_asteroid(asteroid)
+                hit.lives -= 1
+                self.add_explosion(asteroid.pos)
+                if hit.lives <= 0:
+                    self.lose_spaceship(hit)
+                    if not self.spaceships:
+                        return
+                continue
+            for shot in list(self.shots):
                 if asteroid.collide_widget(shot):
                     self.remove_asteroid(asteroid)
                     shot.spaceship.points += 1
                     self.remove_shot(shot)
 
                     self.add_explosion(asteroid.pos)
+                    break
 
-    def add_spaceship(self):
-        spaceship = Spaceship()
+    def lose_spaceship(self, spaceship):
+        """A ship ran out of lives: it leaves the field, its controls stop.
+        The game ends once no ship is left."""
+        pos = spaceship.pos
+        for player, controls in enumerate(self.controls):
+            if controls is not None and controls.spaceship is spaceship:
+                controls.show_touch_buttons(False)   # lets go of the stick
+                self.remove_widget(controls)
+                self.controls[player] = None
+        if len(self.spaceships) == 1:
+            self.game_stop()
+        else:
+            self.remove_spaceship(spaceship)
+        self.add_explosion(pos)
+
+    def add_spaceship(self, player=0, players=1, cabin='blue'):
+        spaceship = Spaceship(cabin=cabin)
         spaceship.pos = Vector(*self.center) - Vector(*spaceship.size) / 2
+        if players > 1:   # side by side, a ship length apart
+            offset = spaceship.width * 1.5 * (1 if player else -1)
+            spaceship.pos = Vector(offset, 0) + spaceship.pos
         self.spaceships.append(spaceship)
         self.add_widget(spaceship)
         return spaceship
@@ -732,7 +1561,7 @@ class SpacePilgrimGame(Widget):
         position = choice(list(positions.values()))
 
         if (
-            len(self.asteroids) < 3 and self.spaceships and
+            len(self.asteroids) < 2 + self.num_players and self.spaceships and
             min(map(lambda s: position.distance(s.pos), self.spaceships)) > 200
         ):
             asteroid = Asteroid()
