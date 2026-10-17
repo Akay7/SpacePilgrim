@@ -59,13 +59,14 @@
 
 <SpaceshipStatus>:
     Label:
-        # one player: top right. Multiplayer: a touch player's block is in
-        # the middle of their side, between the joystick and the FIRE
-        # button, turned so that it reads right from their seat (the touch
-        # players sit at opposite sides: left one faces right, right one
-        # left); keyboard and gamepad players sit in front of the screen and
-        # get a column of the top row, in player order
-        center_x: metrics.cm(2.7) if root.side == 'left' else (Window.width - metrics.cm(2.7) if root.side == 'right' else (Window.width * (root.column + 0.5) / 4 if root.side == 'top' else Window.width - metrics.dp(210)))
+        # one player: top right. Multiplayer: a touch player's block is at
+        # the middle of their side, just inside their touch controls (the
+        # turned text is one line high across), turned so that it reads
+        # right from their seat (the touch players sit at opposite sides:
+        # left one faces right, right one left); keyboard and gamepad players
+        # sit in front of the screen and get a column of the top row, in
+        # player order
+        center_x: root.inset + self.texture_size[1] / 2 if root.side == 'left' else (Window.width - root.inset - self.texture_size[1] / 2 if root.side == 'right' else (Window.width * (root.column + 0.5) / 4 if root.side == 'top' else Window.width - metrics.dp(210)))
         center_y: Window.height / 2 if root.side in ('left', 'right') else Window.height - 50
         canvas.before:
             PushMatrix

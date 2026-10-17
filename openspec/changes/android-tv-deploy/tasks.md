@@ -17,8 +17,8 @@
 ## 4. Verification on TV
 
 - [x] 4.1 Install on the Android Studio "Android TV (1080p)" emulator; confirm the tile and banner in the launcher
-- [ ] 4.2 Play through start, steer, thrust, fire, back to menu using only the remote D-pad; fix keycode mapping in `main.py` if the centre button does not fire
-- [ ] 4.3 Check HUD and object sizes on 1080p and 4K emulator profiles; fix in `main.py`/`spacepilgrim.kv` if needed
+- [x] 4.2 Play through start, steer, thrust, fire, back to menu using only the remote D-pad; fix keycode mapping in `main.py` if the centre button does not fire
+- [x] 4.3 Check HUD and object sizes on 1080p and 4K emulator profiles; fix in `main.py`/`spacepilgrim.kv` if needed
 - [ ] 4.4 Install on a phone and confirm the regular launcher entry and touch buttons are unchanged
 - [ ] 4.5 If available, test on a real TV device (Chromecast with Google TV / Nvidia Shield) with remote and gamepad
 

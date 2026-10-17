@@ -1511,12 +1511,44 @@ def test_mixed_game_status_positions_angles_and_colours(kv_game):
         assert label(status).center_x == pytest.approx(
             Window.width * (column + 0.5) / 4)
         assert label(status).center_y == pytest.approx(Window.height - 50)
-    assert label(left).center_x == pytest.approx(main.cm(2.7))
-    assert label(right).center_x == pytest.approx(Window.width - main.cm(2.7))
+    # just inside the player's own controls, at the middle of the side
+    left_stick = game.controls[1].touch_buttons.stick
+    right_stick = game.controls[3].touch_buttons.stick
+    assert label(left).center_x > left_stick.right
+    assert label(right).center_x < right_stick.x
     assert label(left).center_y == pytest.approx(Window.height / 2)
     for status in game.statuses:
         assert tuple(status.color[:3]) == pytest.approx(
             main.cabin_rgb(status.spaceship.cabin))
+
+
+@pytest.mark.parametrize('scale', [1.0, 3.0])
+def test_touch_status_never_overlaps_its_controls(kv_game, scale):
+    """The turned text is one line high across; its horizontal extent must
+    stay clear of the joystick and FIRE column of the same side, also when
+    the controls are made bigger in the settings."""
+    game = kv_game
+    game.touch_settings.scale = scale
+    game.game_start(slots=[('touch', 'left'), ('touch', 'right')])
+    for status, controls in zip(game.statuses, game.controls):
+        layout = controls.touch_buttons
+        label = status.children[0]
+        label.texture_update()      # text is otherwise rendered next frame
+        half = label.texture_size[1] / 2
+        text_left, text_right = label.center_x - half, label.center_x + half
+        assert text_right - text_left > 0
+        for pad in (layout.stick, layout.fire):
+            if status.side == 'left':
+                assert text_left >= pad.right, (scale, status.side)
+            else:
+                assert text_right <= pad.x, (scale, status.side)
+        # and it follows a later size change
+        layout.set_scale(scale * 1.2)
+        half = label.texture_size[1] / 2
+        if status.side == 'left':
+            assert label.center_x - half >= layout.stick.right
+        else:
+            assert label.center_x + half <= layout.stick.x
 
 
 def test_fire_label_is_turned_toward_each_player(game, touch2):
@@ -1530,3 +1562,35 @@ def test_fire_label_is_turned_toward_each_player(game, touch2):
     assert single.fire.text_angle == 0 and single.fire._label_turn.angle == 0
     assert tuple(one.fire._label_turn.origin[:2]) == pytest.approx(
         tuple(one.fire.center))
+
+
+def test_join_strips_hidden_without_touchscreen(kv_game):
+    game = kv_game
+    game.ship_colors.path = None
+    game.has_touch = False                      # e.g. Android TV
+    game.show_ship_select(2)
+    join = game.select
+    for strip in join.side_buttons.values():
+        assert strip.opacity == 0 and strip.disabled
+    assert 'tap a side' not in join.panels[0]['empty'].text
+    _press(game, KEY_SPACE)                     # keys and pads still join
+    assert join.slots[0] == ('keys', 0)
+
+
+def test_first_touch_shows_join_strips(kv_game):
+    game = kv_game
+    game.ship_colors.path = None
+    game.has_touch = False
+    game.show_ship_select(2)
+    join = game.select
+    game._on_window_touch(None, None)
+    assert game.has_touch
+    for strip in join.side_buttons.values():
+        assert strip.opacity == 1 and not strip.disabled
+    assert 'tap a side' in join.panels[1]['empty'].text
+    join.side_buttons['right'].dispatch('on_press')
+    assert join.slots[0] == ('touch', 'right')
+
+
+def test_has_touchscreen_off_android():
+    assert main.has_touchscreen() is True       # desktop: mouse clicks

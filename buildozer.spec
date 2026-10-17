@@ -22,7 +22,7 @@ source.include_patterns = images/*.png, sounds/*.ogg,
 #source.exclude_exts = spec
 
 # (list) List of directory to exclude (let empty to not exclude anything)
-source.exclude_dirs = android
+source.exclude_dirs = android, tools, store
 
 # (list) List of exclusions using pattern matching
 # Do not prefix with './'

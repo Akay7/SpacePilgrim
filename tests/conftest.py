@@ -8,6 +8,9 @@ os.environ.setdefault("KIVY_NO_ARGS", "1")
 os.environ.setdefault("KIVY_NO_CONSOLELOG", "1")
 os.environ.setdefault("KIVY_GL_BACKEND", "mock")
 os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+# A hidden window: creating a visible one blocks while a Wayland session is
+# locked, and nothing needs to be seen.
+os.environ.setdefault("KCFG_GRAPHICS_WINDOW_STATE", "hidden")
 
 ROOT = Path(__file__).resolve().parent.parent
 os.chdir(ROOT)  # main.py loads assets using paths relative to the project

@@ -426,6 +426,20 @@ def is_android_tv():
         return False
 
 
+def has_touchscreen():
+    """Whether the device has a touchscreen. Android TV usually has none;
+    on desktops a mouse click arrives as a touch, so count it as one."""
+    if platform != 'android':
+        return True
+    try:
+        from jnius import autoclass
+        activity = autoclass('org.kivy.android.PythonActivity').mActivity
+        return bool(activity.getPackageManager().hasSystemFeature(
+            'android.hardware.touchscreen'))
+    except Exception:
+        return True
+
+
 class Explosion(Widget):
     frame = NumericProperty(0)
     texture = ObjectProperty()
@@ -563,6 +577,24 @@ class SpaceshipStatus(Widget):
     # player's side, 'top' for keyboard and gamepad players
     side = StringProperty('')
     column = NumericProperty(0)         # 'top': the player's slot
+    # 'left' / 'right': distance from that screen edge to the inner side of
+    # the player's touch controls; the block sits just inside it
+    inset = NumericProperty(0)
+
+    def follow(self, touch_buttons):
+        """Keep the block next to the touch controls of its player, whatever
+        their size: the joystick is the widest control of the column."""
+        stick = touch_buttons.stick
+
+        def place(*args):
+            gap = dp(8)
+            if self.side == 'left':
+                self.inset = stick.right - touch_buttons.x + gap
+            else:
+                self.inset = touch_buttons.right - stick.x + gap
+        stick.bind(pos=place, size=place)
+        touch_buttons.bind(pos=place, size=place)
+        place()
     color = ListProperty([1, 1, 1, 1])  # tint of the text: the cabin colour
 
 
@@ -1219,10 +1251,11 @@ class JoinScreen(BoxLayout):
 
     STRIP_WIDTH = dp(64)
 
-    def __init__(self, colors, bindings, **kwargs):
+    def __init__(self, colors, bindings, touch=True, **kwargs):
         super().__init__(spacing=dp(10), **kwargs)
         self.ship_colors = colors
         self.bindings = bindings
+        self.touch = touch      # offer joining by touch (side strips)
         self.slots = [None] * MAX_PLAYERS
         self.ready = [False] * MAX_PLAYERS
         self.flashing = [False] * MAX_PLAYERS
@@ -1407,6 +1440,12 @@ class JoinScreen(BoxLayout):
         if self.parent is not None:
             self.parent.close_ship_select()
 
+    def allow_touch(self):
+        """A touch arrived on a device thought to have no touchscreen."""
+        if not self.touch:
+            self.touch = True
+            self.refresh()
+
     # ---- drawing -------------------------------------------------------
 
     def device_label(self, device):
@@ -1431,7 +1470,8 @@ class JoinScreen(BoxLayout):
     def refresh(self):
         for side, strip in self.side_buttons.items():
             slot = self.slot_of(('touch', side))
-            strip.disabled = slot is not None
+            strip.opacity = 1 if self.touch else 0
+            strip.disabled = slot is not None or not self.touch
             strip.text = ('Tap to join by touch' if slot is None
                           else 'Player {} · touch'.format(slot + 1))
         for slot, w in enumerate(self.panels):
@@ -1441,6 +1481,10 @@ class JoinScreen(BoxLayout):
             if device is None:
                 w['title'].color = (1, 1, 1, 0.6)
                 w['border_color'].rgba = (1, 1, 1, 0.3)
+                w['empty'].text = (
+                    'Press FIRE on a keyboard set or gamepad' + (
+                        '\n\nor tap a side of the screen to play by touch '
+                        'there' if self.touch else ''))
                 panel.add_widget(w['empty'])
                 continue
             color = self.ship_colors.colors[slot]
@@ -1517,6 +1561,9 @@ class SpacePilgrimGame(Widget):
         self.touch_ui = self._touch_visibility(
             platform == 'android' and not is_android_tv())
         self._inputs_down = set()
+        # join by touch is offered only where touch exists (not on most
+        # Android TVs) or once a touch has arrived
+        self.has_touch = has_touchscreen()
         self.bindings = KeyBindings(
             os.path.join(app.user_data_dir, 'keybindings.json')
             if app else None)
@@ -1585,6 +1632,8 @@ class SpacePilgrimGame(Widget):
             controls = ControlsManager(
                 spaceship=spaceship, side=touch_side, touch=touch)
             controls.touch_buttons.set_scale(self.touch_settings.scale)
+            if touch_side:
+                status.follow(controls.touch_buttons)
             self.add_widget(controls)
             self.controls[slot] = controls
         self.spaceship_status = self.statuses[0]
@@ -1623,6 +1672,10 @@ class SpacePilgrimGame(Widget):
 
     def _on_window_touch(self, window, touch):
         self._set_touch_ui(True)
+        if not self.has_touch:
+            self.has_touch = True
+            if self.select_active and isinstance(self.select, JoinScreen):
+                self.select.allow_touch()
 
     def _input(self, source, action, pressed, device=None):
         """Send a press/release of `action` coming from `source` (a hashable
@@ -1733,7 +1786,8 @@ class SpacePilgrimGame(Widget):
         if players == 1:
             self.select = ShipSelectScreen(self.ship_colors, 1)
         else:
-            self.select = JoinScreen(self.ship_colors, self.bindings)
+            self.select = JoinScreen(self.ship_colors, self.bindings,
+                                     touch=self.has_touch)
         self.add_widget(self.select)
 
     def start_selected(self):

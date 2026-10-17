@@ -40,7 +40,7 @@ The game already runs as a landscape Kivy app and handles arrow keys + space, wh
 - [x] Gamepad left stick, D-pad and buttons via SDL joystick events (button ids are Xbox-style defaults, untested on hardware).
 - [ ] Check HUD and object sizes on 1080p and 4K TV emulators.
 - [ ] Test on the Android Studio "Android TV (1080p)" emulator (done: launches from the TV launcher, menu/settings navigable with the remote, Back returns to the menu) and a real device (Chromecast with Google TV, Nvidia Shield).
-- [ ] Play Console: opt in to the Android TV form factor, upload 1920x1080 TV screenshots; the app must be fully playable with D-pad / gamepad only.
+- [ ] Play Console: opt in to the Android TV form factor, upload the 1920x1080 TV screenshots from `store/play/tv/` and the 1280x720 TV banner `store/play/tv-banner.png` (see [Google Play listing images](#google-play-listing-images)); the app must be fully playable with D-pad / gamepad only.
 
 To verify a build (manifest verified with `aapt2 dump badging`; emulator/device testing still to do):
 
@@ -69,17 +69,28 @@ On the join screen every player takes a slot with the device they will play with
 | Keyboard set 1 (W / A / D + Space; arrow keys and Enter also count as set 1) | Space | A / D | Space | W |
 | Keyboard set 2 (I / J / L + K) | K | J / L | K | I |
 | Gamepad | A / X (fire) | stick or D-pad left / right | A / X | Back / Start |
-| Touch | *Tap to join by touch* strip at the left or right edge, on the side where you sit | `<` / `>` | *Ready* | *Leave* |
+| Touch | *Tap to join by touch* strip at the left or right edge, on the side where you sit (shown on devices with a touchscreen, or after the first touch) | `<` / `>` | *Ready* | *Leave* |
 
 Every device, a side strip included, takes the first free slot; a strip is greyed out while a touch player sits on its side. Each slot shows the device that joined it and lights up when that device is used, so everyone sees which keys or pad belong to which ship, and players can set up at the same time. At most two players share the keyboard (two sets) and at most two play by touch; further players use gamepads (up to four players). The game starts when at least two players have joined and all of them are *Ready*. Escape, or Back / Start on a pad that has not joined, returns to the menu. Players cannot pick the same cabin colour; the choice of each slot is saved in `ship_colors.json`. Single player keeps a one-ship selection screen that any keyboard set or gamepad drives.
 
-In the game each device drives only the ship it joined with; devices that did not join are ignored except Back / Escape, which ends the game. Touch players sit at the left and right sides of the device, facing each other, on the side whose strip they tapped: each has the stick under the left hand and FIRE under the right hand from their seat, one control in the bottom corner and the other at the top of their side. Their stick is turned toward them: push it away from you (toward the middle of the screen) to thrust, and to your own left / right to turn. Their controls stay shown for the whole game, whatever the touch setting; keyboard and gamepad players get none. A touch player's lives and points are in the middle of their side, turned toward them; keyboard and gamepad players sit in front of the screen and their lives and points run along the top in player order. Each block is in the colour of the player's cabin.
+In the game each device drives only the ship it joined with; devices that did not join are ignored except Back / Escape, which ends the game. Touch players sit at the left and right sides of the device, facing each other, on the side whose strip they tapped: each has the stick under the left hand and FIRE under the right hand from their seat, one control in the bottom corner and the other at the top of their side. Their stick is turned toward them: push it away from you (toward the middle of the screen) to thrust, and to your own left / right to turn. Their controls stay shown for the whole game, whatever the touch setting; keyboard and gamepad players get none. A touch player's lives and points are at the middle of their side, just inside their own touch controls (they move with the controls' size setting and never cover them), turned toward them; keyboard and gamepad players sit in front of the screen and their lives and points run along the top in player order. Each block is in the colour of the player's cabin.
 
 Both keyboard sets work at the same time (very cheap keyboards may not report six held keys at once; the keys are rebindable). In a single-player game any keyboard set and any gamepad drives the ship.
 
 Touch controls are a joystick overlay (draggable stick bottom-left: up thrusts, left / right turn, in-between positions combine them; square red FIRE button bottom-right). They appear on any device as soon as the screen is touched and hide again when a keyboard key or gamepad input is used, so keyboard, gamepad and touch can be mixed freely. **Settings > Touch controls** switches between Auto (default), On (always shown) and Off, and sets the size of the controls with a slider (50-400%, left / right keys also work; applied to the next game and limited to what fits on screen); the choices are saved in `touch_ui.json` in the app's user data directory.
 
 Keyboard keys for thrust, turn left, turn right and fire can be changed in **Settings > Keyboard layout** in the main menu: pick an action, then press the new key (Escape cancels). The *Keys of: Set* button switches between keyboard set 1 (defaults W / A / D / Space) and set 2 (I / J / L / K); **Reset to defaults** restores both. Arrow keys, Enter and Escape are fixed (arrows and Enter always count as set 1) so the menus always stay reachable, and a key already used by any action of either set is refused. Bindings of both sets are saved in `keybindings.json` (physical keys, so they work on any keyboard layout; files from versions with one set are read as set 1) in the app's user data directory.
+
+### Google Play listing images
+
+The store listing images are rendered from the game itself, so they never need to be taken by hand:
+
+```bash
+.venv/bin/python tools/play_listing.py        # everything
+.venv/bin/python tools/play_listing.py tv     # one set
+```
+
+It writes five 16:9 screenshots each for `phone` (1920x1080), `tablet-7` (1920x1080), `tablet-10` (2560x1440) and `tv` (1920x1080), plus the Android TV listing banner `tv-banner.png` (1280x720), into `store/play/`, and checks every file against the Play Console rules (24-bit PNG without alpha, 16:9, 1920-3840 px, 4-8 per set); it exits with an error naming the file if one breaks a rule. The scenes (gameplay first, multiplayer, join screen, ship selection, menu) are fixed in `tools/listing_scenes.py` and use the real game widgets at each device's size and screen density, with touch controls on phone/tablet and keyboard/gamepad players on TV. Rerun it after any visual change. The images are not committed (`store/play/` is in `.gitignore`, a full set is ~60 MB) and, like the script, are not packaged into the APK. It needs a desktop session with a display (it renders in hidden windows, so a locked screen is fine) and takes about 10 seconds.
 
 ### Build for Android
 
