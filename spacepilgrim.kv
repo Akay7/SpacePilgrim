@@ -59,12 +59,14 @@
 
 <SpaceshipStatus>:
     Label:
-        # one player: top right; two players: in the middle of the player's
-        # side, between the joystick and the FIRE button, turned so that it
-        # reads right from the player's seat (the players sit at opposite
-        # sides of the screen: left player faces right, right player left)
-        center_x: metrics.cm(2.7) if root.side == 'left' else (Window.width - metrics.cm(2.7) if root.side == 'right' else Window.width - metrics.dp(210))
-        center_y: Window.height / 2 if root.side else Window.height - 50
+        # one player: top right. Multiplayer: a touch player's block is in
+        # the middle of their side, between the joystick and the FIRE
+        # button, turned so that it reads right from their seat (the touch
+        # players sit at opposite sides: left one faces right, right one
+        # left); keyboard and gamepad players sit in front of the screen and
+        # get a column of the top row, in player order
+        center_x: metrics.cm(2.7) if root.side == 'left' else (Window.width - metrics.cm(2.7) if root.side == 'right' else (Window.width * (root.column + 0.5) / 4 if root.side == 'top' else Window.width - metrics.dp(210)))
+        center_y: Window.height / 2 if root.side in ('left', 'right') else Window.height - 50
         canvas.before:
             PushMatrix
             Rotate:
@@ -73,8 +75,8 @@
         canvas.after:
             PopMatrix
         color: root.color
-        text: "Lives {:<5} Points {}".format(root.spaceship.lives, root.spaceship.points)
-        font_size: "23dp"
+        text: ("Lives {}  Points {}" if root.side == 'top' else "Lives {:<5} Points {}").format(root.spaceship.lives, root.spaceship.points)
+        font_size: "17dp" if root.side == 'top' else "23dp"
         font_name: 'data/fonts/RobotoMono-Regular.ttf'
 
 
@@ -171,8 +173,8 @@
         on_press: root.begin_rebind('fire')
 
     Button:
-        id: btn_player
-        on_press: root.switch_player()
+        id: btn_set
+        on_press: root.switch_set()
 
     Button:
         text: "Reset to defaults"

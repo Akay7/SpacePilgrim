@@ -19,7 +19,7 @@
 
 - [x] 3.1 Add a per-player `ScreenButtonsLayout` on the left/right side (left: joystick at the top, FIRE in the bottom corner; right: FIRE at the top, joystick in the bottom corner) with size clamping and the existing visibility/size settings applied to both; verify with tests that the two sets do not overlap, stay on screen and keep margins at 100 % and 400 % scale
 - [x] 3.2 Route each overlay's press/release to its own player's `ControlsManager`; verify with a test where player 1 holds the stick left while player 2 presses FIRE
-- [ ] 3.3 Check by eye on desktop (mouse/touch emulation) at a phone-landscape and a 1080p size that both sets fit and do not hide the HUD, and tune sizes if needed
+- [x] 3.3 Check by eye on desktop (mouse/touch emulation) at a phone-landscape and a 1080p size that both sets fit and do not hide the HUD, and tune sizes if needed
 
 ## 4. Cabin colours and ship selection
 
@@ -27,6 +27,20 @@
 - [x] 4.2 Add colour persistence (`ship_colors.json`, defaults blue/green, defensive load/save); verify with tests for round-trip, corrupt file and unique colours
 - [x] 4.3 Build the ship selection screen (preview per player, next/previous colour skipping the other player's colour, ready/confirm, Back) shown after "Single player" and "Multiplayer", operable by touch, keyboard sets and gamepads; verify with tests for preview change, skip taken colour, per-player keys and Back returning to the menu
 - [x] 4.4 Enable the "Multiplayer" button in the menu and wire both entries to the selection screen and `game_start(players=N)`; verify with a test that Multiplayer starts a two-ship game with the chosen colours
+
+## 6. Join screen and up to four players
+
+Sections 1–4 built the first two-player iteration with a fixed device order; the tasks below rework it to joining and four slots (see design decisions 1–5).
+
+- [x] 6.1 Treat the two keyboard sets as devices: `lookup` returns `(set, action)` with arrows/Enter as set 1, and the keyboard page switch reads "Keys of: Set 1 / Set 2"; verify with the existing bindings tests adapted to set wording and a test for the relabelled switch
+- [x] 6.2 Extend `ShipColors` to four slots (defaults blue/green/red/yellow, two-entry file kept, unique colours among joined slots, saved colour or first free on join); verify with tests for round-trip, two-entry migration, corrupt file and joining with a taken colour
+- [x] 6.3 Replace the multiplayer selection with the join screen: four slots, join by FIRE (keyboard set / pad, first free slot) or "Tap to join by touch" (that slot, offered while fewer than two touch players joined; takes the free side, left first), device label with the touch side and input highlight, colour/ready/leave per device, Escape or an unjoined pad's Back to the menu, start with at least two joined and all ready; single player keeps its one-panel screen; verify with tests for joining in order, touch slot choice and side, the two-touch limit, a device joining once, simultaneous setup, each way to leave, the two-player minimum and Escape
+- [x] 6.4 Route game input by device -> slot (`game_start` with the joined slots; set/pad/touch drive only their slot; unjoined devices ignored except Back; single player unchanged); verify with tests for swapped keyboard sets, an unjoined set, two pads, a joined pad's Back ending the game, a four-player start (four ships, no overlap) and single-player routing
+- [x] 6.5 HUD for up to four players: touch players' blocks in the middle of their side turned −90/90, keyboard and gamepad players' blocks upright along the top in player order; verify with a test for a mixed game (two touch, one keyboard, one pad) checking positions, angles and colours
+- [x] 6.6 Touch overlays only for touch players, on the side they joined, always shown in game whatever the touch setting; verify with tests that a non-touch player has no overlay, that a keyboard press by another player does not hide a touch player's controls, and that the two sides keep the existing layout checks
+- [x] 6.7 Update the README for joining/leaving, the two-keyboard and two-touch limits, gamepads for players 3–4 and the HUD, and verify it matches the code
+- [x] 6.8 Move joining by touch to two side strips at the left and right edges of the join screen (labels turned toward the seat; a strip takes the first free slot as a touch player on its side; disabled and naming the player while its side is taken); remove the per-slot touch button; verify with tests for joining from each side, a taken side, leaving freeing the side, and keys still joining
+- [x] 6.9 Turn a touch player's joystick toward their seat (`Joystick.angle` −90 / 90 from the side; thrust away from the player, turn to their left / right; marks turned); single player unchanged; verify with tests for forward and both turns on each side and the single-player stick, and update the README
 
 ## 5. Integration
 

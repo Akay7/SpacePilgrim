@@ -282,29 +282,30 @@ def test_default_bindings():
     assert kb.action_for(KEY_ESC) == 'back'
 
 
-def test_second_player_defaults():
+def test_second_set_defaults():
     kb = main.KeyBindings()
     assert kb.lookup(ord('w')) == (0, 'up')
     assert kb.lookup(ord('i')) == (1, 'up')
     assert kb.lookup(ord('j')) == (1, 'left')
     assert kb.lookup(ord('l')) == (1, 'right')
     assert kb.lookup(ord('k')) == (1, 'fire')
-    assert kb.lookup(KEY_UP) == (0, 'up')       # arrows steer player 1
+    assert kb.lookup(KEY_UP) == (0, 'up')       # arrows count as set 1
+    assert kb.lookup(KEY_ENTER) == (0, 'fire')
     assert kb.lookup(KEY_ESC) == (None, 'back')
     assert kb.lookup(ord('q')) == (None, None)
     assert kb.label('fire', 1) == 'K'
 
 
-def test_rebind_is_per_player_and_conflicts_span_players():
+def test_rebind_is_per_set_and_conflicts_span_sets():
     kb = main.KeyBindings()
-    assert kb.rebind('left', ord('u'), player=1) is None
+    assert kb.rebind('left', ord('u'), key_set=1) is None
     assert kb.lookup(ord('u')) == (1, 'left')
     assert kb.lookup(ord('j')) == (None, None)
-    assert kb.action_for(ord('a')) == 'left'     # player 1 unchanged
-    message = kb.rebind('up', ord('w'), player=1)
-    assert 'Player 1' in message and 'Thrust' in message
+    assert kb.action_for(ord('a')) == 'left'     # set 1 unchanged
+    message = kb.rebind('up', ord('w'), key_set=1)
+    assert 'Set 1' in message and 'Thrust' in message
     assert kb.lookup(ord('i')) == (1, 'up')      # kept
-    assert 'Player 2' in kb.rebind('fire', ord('i'))
+    assert 'Set 2' in kb.rebind('fire', ord('i'))
     assert kb.lookup(ord('k')) == (1, 'fire')
 
 
@@ -353,10 +354,10 @@ def test_invalid_saved_bindings_fall_back(tmp_path, content):
     assert kb.keys == main.DEFAULT_PLAYER_KEYS
 
 
-def test_player_bindings_round_trip(tmp_path):
+def test_set_bindings_round_trip(tmp_path):
     path = str(tmp_path / 'keys.json')
     kb = main.KeyBindings(path)
-    kb.rebind('fire', ord('h'), player=1)
+    kb.rebind('fire', ord('h'), key_set=1)
     again = main.KeyBindings(path)
     assert again.lookup(ord('h')) == (1, 'fire')
     assert again.lookup(KEY_SPACE) == (0, 'fire')
@@ -844,28 +845,54 @@ def game2():
     g.asteroid_schedule.cancel()
 
 
-def test_keyboard_page_switches_player(kv_game):
+TOUCH2 = [('touch', 'left'), ('touch', 'right')]
+
+
+@pytest.fixture
+def start_game():
+    """Start games with given slots; their clocks stop after the test."""
+    games = []
+
+    def start(**kwargs):
+        g = SpacePilgrimGame()
+        g.game_stop()
+        g.game_start(**kwargs)
+        games.append(g)
+        return g
+    yield start
+    for g in games:
+        g.frame_schedule.cancel()
+        g.asteroid_schedule.cancel()
+
+
+@pytest.fixture
+def touch2(start_game):
+    return start_game(slots=TOUCH2)
+
+
+def test_keyboard_page_switches_set(kv_game):
     game = kv_game
     game.bindings.path = None
     _open_keyboard(game)
     page = game.settings
-    assert page.ids.btn_player.text == 'Keys of: Player 1'
-    page.switch_player()
-    assert page.ids.btn_player.text == 'Keys of: Player 2'
+    assert page.ids.btn_set.text == 'Keys of: Set 1'
+    page.switch_set()
+    assert page.ids.btn_set.text == 'Keys of: Set 2'
     assert [b.text for b in page.buttons][:4] == [
         'Thrust: I', 'Turn left: J', 'Turn right: L', 'Fire: K']
     page.begin_rebind('left')
     game._on_key_down(None, ord('u'))
     game._on_key_up(None, ord('u'))
-    assert page.ids.btn_player.text == 'Keys of: Player 2'
+    assert page.ids.btn_set.text == 'Keys of: Set 2'
     assert game.bindings.lookup(ord('u')) == (1, 'left')
     assert game.bindings.action_for(ord('a')) == 'left'
     assert game.bindings.label('left', 0) == 'A'
     page.begin_rebind('up')                       # W is player 1's key
     game._on_key_down(None, ord('w'))
     game._on_key_up(None, ord('w'))
-    assert 'Player 1' in page.ids.message.text
-    page.switch_player()
+    assert 'Set 1' in page.ids.message.text
+    page.switch_set()
+    assert page.ids.btn_set.text == 'Keys of: Set 1'
     assert page.buttons[0].text == 'Thrust: W'
 
 
@@ -873,11 +900,20 @@ def test_two_player_start_has_two_ships_and_own_controls(game2):
     assert len(game2.spaceships) == 2
     a, b = game2.spaceships
     assert a.pos != b.pos
+    assert game2.slots == [('keys', 0), ('keys', 1)]
     assert len(game2.controls) == 2
     assert game2.spaceship_controls is game2.controls[0]
     assert game2.controls[0].spaceship is a and game2.controls[1].spaceship is b
-    assert [c.touch_buttons.side for c in game2.controls] == ['left', 'right']
+    assert [c.touch for c in game2.controls] == ['off', 'off']
+    assert not any(c.touch_buttons.active for c in game2.controls)
     assert a.cabin != b.cabin
+
+
+def test_touch_players_get_controls_on_their_side(touch2):
+    left, right = touch2.controls[:2]
+    assert (left.touch_buttons.side, right.touch_buttons.side) == (
+        'left', 'right')
+    assert left.touch_buttons.active and right.touch_buttons.active
 
 
 def test_single_player_start_unchanged(game):
@@ -909,32 +945,58 @@ def test_arrow_keys_steer_player_one_only(game2):
     assert one.thrust and not two.thrust
 
 
-def test_second_set_ignored_in_single_player(game):
+def test_any_keyboard_set_drives_single_ship(game):
     ship = game.spaceships[0]
     game._on_key_down(None, ord('i'))
+    assert ship.thrust
     game._on_key_down(None, ord('k'))
-    assert not ship.thrust and game.shots == []
+    assert len(game.shots) == 1
 
 
-def test_two_gamepads_one_per_player(game2):
-    one, two = game2.spaceships
-    game2._on_joy_button_down(None, 7, 0)       # first pad: stick id 7
-    assert [s.spaceship for s in game2.shots] == [one]
-    game2._on_joy_button_down(None, 3, 0)       # second pad
-    assert [s.spaceship for s in game2.shots] == [one, two]
-    game2._on_joy_axis(None, 3, 1, -32767)      # second pad stick up
+def test_joined_gamepads_drive_their_own_ship(start_game):
+    game = start_game(slots=[('pad', 7), ('pad', 3), None, None])
+    one, two = game.spaceships
+    game._on_joy_button_down(None, 7, 0)
+    assert [s.spaceship for s in game.shots] == [one]
+    game._on_joy_button_down(None, 3, 0)
+    assert [s.spaceship for s in game.shots] == [one, two]
+    game._on_joy_axis(None, 3, 1, -32767)       # pad 3 stick up
     assert two.thrust and not one.thrust
-    game2._on_joy_hat(None, 7, 0, (-1, 0))
+    game._on_joy_hat(None, 7, 0, (-1, 0))
     assert one.angle_rotation == 3 and two.angle_rotation == 0
-    game2._on_joy_button_down(None, 9, 0)       # a third pad does nothing
-    assert len(game2.shots) == 2
+    game._on_joy_button_down(None, 9, 0)        # a pad that did not join
+    assert len(game.shots) == 2
+    game._on_key_down(None, ord('w'))           # nor did the keyboard
+    assert not one.thrust
 
 
-def test_single_gamepad_and_keyboard_set(game2):
-    one, two = game2.spaceships
-    game2._on_joy_axis(None, 0, 1, -32767)
-    game2._on_key_down(None, ord('l'))
-    assert one.thrust and two.angle_rotation == -3
+def test_swapped_keyboard_sets_and_a_gamepad(start_game):
+    game = start_game(slots=[('keys', 1), ('pad', 0), ('keys', 0), None])
+    one, two, three = game.spaceships
+    game._on_key_down(None, ord('i'))           # set 2 joined as player 1
+    assert one.thrust and not three.thrust
+    game._on_key_down(None, ord('a'))           # set 1 joined as player 3
+    assert three.angle_rotation == 3 and one.angle_rotation == 0
+    game._on_joy_axis(None, 0, 1, -32767)
+    assert two.thrust
+
+
+def test_four_player_start(start_game):
+    game = start_game(slots=[('keys', 0), ('pad', 0), ('pad', 1), ('keys', 1)])
+    ships = game.spaceships
+    assert len(ships) == 4 and game.num_players == 4
+    assert len({s.cabin for s in ships}) == 4
+    for i, a in enumerate(ships):
+        for b in ships[i + 1:]:
+            assert not a.collide_widget(b)
+    game._on_joy_button_down(None, 1, 0)
+    assert game.shots[0].spaceship is ships[2]
+
+
+def test_joined_pad_back_ends_game(start_game):
+    game = start_game(slots=[('pad', 0), ('keys', 0), None, None])
+    game._on_joy_button_down(None, 0, 7)        # Start
+    assert game.menu in game.children and game.spaceships == []
 
 
 def test_any_gamepad_drives_single_ship(game):
@@ -1000,10 +1062,11 @@ def test_back_from_any_player_ends_two_player_game(game2):
 
 def test_one_status_block_per_ship(game2, game):
     assert len(game2.statuses) == 2
-    left, right = game2.statuses
-    assert (left.side, right.side) == ('left', 'right')
-    assert left.spaceship is game2.spaceships[0]
-    assert tuple(left.color[:3]) == pytest.approx(
+    one, two = game2.statuses
+    assert (one.side, two.side) == ('top', 'top')   # keyboard players
+    assert (one.column, two.column) == (0, 1)
+    assert one.spaceship is game2.spaceships[0]
+    assert tuple(one.color[:3]) == pytest.approx(
         main.cabin_rgb(game2.spaceships[0].cabin))
     assert len(game.statuses) == 1 and game.statuses[0].side == ''
 
@@ -1017,9 +1080,9 @@ def _touch_layouts(game):
 
 @pytest.mark.parametrize('size', [(800, 480), (1000, 600), (1920, 1080)])
 @pytest.mark.parametrize('scale', [1.0, 4.0])
-def test_two_touch_sets_are_columns_on_each_side(game2, scale, size):
+def test_two_touch_sets_are_columns_on_each_side(touch2, scale, size):
     margin = main.cm(main.MARGIN_CM)
-    left, right = [c.touch_buttons for c in game2.controls]
+    left, right = [c.touch_buttons for c in touch2.controls]
     for layout in (left, right):
         layout.size = size
         layout.set_scale(scale)
@@ -1045,38 +1108,93 @@ def test_two_touch_sets_are_columns_on_each_side(game2, scale, size):
     assert left.fire.center_x < w / 2 < right.fire.center_x
 
 
-def test_touch_sets_steer_their_own_ship(game2):
-    game2._on_window_touch(None, None)
-    one, two = game2.spaceships
-    left, right = _touch_layouts(game2)
-    stick, consumed = _touch_down(left, _stick_pos(left, -0.9, 0))
+def test_touch_sets_steer_their_own_ship(touch2):
+    touch2._on_window_touch(None, None)
+    one, two = touch2.spaceships
+    left, right = _touch_layouts(touch2)
+    stick, consumed = _touch_down(left, _stick_pos(left, 0, 0.9))
     assert consumed and one.angle_rotation == 3
     fire, consumed = _touch_down(right, _fire_pos(right))
     assert consumed
-    assert [s.spaceship for s in game2.shots] == [two]
+    assert [s.spaceship for s in touch2.shots] == [two]
     assert one.angle_rotation == 3 and two.angle_rotation == 0
     _release(fire, right.fire)
     _release(stick, left.stick)
     assert one.angle_rotation == 0
 
 
-def test_touch_pads_ignore_the_other_half(game2):
-    game2._on_window_touch(None, None)
-    left, right = _touch_layouts(game2)
+def test_touch_pads_ignore_the_other_half(touch2):
+    touch2._on_window_touch(None, None)
+    left, right = _touch_layouts(touch2)
     _, consumed = _touch_down(left, _fire_pos(right))
     assert not consumed
 
 
-def test_lost_ship_removes_its_touch_set(game2):
-    game2._on_window_touch(None, None)
-    one, two = game2.spaceships
-    left, right = _touch_layouts(game2)
-    stick, _ = _touch_down(left, _stick_pos(left, 0, 0.9))
+def test_lost_ship_removes_its_touch_set(touch2):
+    touch2._on_window_touch(None, None)
+    one, two = touch2.spaceships
+    left, right = _touch_layouts(touch2)
+    stick, _ = _touch_down(left, _stick_pos(left, 0.9, 0))
     assert one.thrust
     for _ in range(3):
-        _hit(game2, one)
+        _hit(touch2, one)
     assert left.parent.parent is None and right.parent.parent is not None
     assert not one.thrust
+
+
+@pytest.mark.parametrize('side, forward, left, right', [
+    # screen directions (dx, dy) of "away from me", "my left", "my right"
+    ('left', (0.9, 0), (0, 0.9), (0, -0.9)),
+    ('right', (-0.9, 0), (0, -0.9), (0, 0.9)),
+])
+def test_side_stick_is_turned_toward_the_seat(touch2, side, forward, left,
+                                               right):
+    controls = touch2.controls[0 if side == 'left' else 1]
+    layout, ship = controls.touch_buttons, controls.spaceship
+    layout.size = (1000, 600)
+    assert layout.stick.angle == (-90 if side == 'left' else 90)
+    for pos, thrust, rotation in ((forward, True, 0), (left, False, 3),
+                                  (right, False, -3)):
+        touch, consumed = _touch_down(layout, _stick_pos(layout, *pos))
+        assert consumed
+        assert (ship.thrust, ship.angle_rotation) == (thrust, rotation), pos
+        _release(touch, layout.stick)
+        assert not ship.thrust and ship.angle_rotation == 0
+
+
+def test_side_stick_marks_point_to_the_seat_directions(touch2):
+    left = touch2.controls[0].touch_buttons
+    left.size = (1000, 600)
+    stick = left.stick
+    up_mark = stick._marks[0].points            # the thrust mark
+    tip_x = up_mark[0]
+    assert tip_x > stick.center_x + stick.width * 0.3   # toward the centre
+    assert abs(up_mark[1] - stick.center_y) < 1e-6
+
+
+def test_single_player_stick_keeps_screen_directions(game):
+    layout = game.spaceship_controls.touch_buttons
+    ship = game.spaceships[0]
+    game._on_window_touch(None, None)
+    layout.size = (1000, 600)
+    assert layout.stick.angle == 0
+    touch, _ = _touch_down(layout, _stick_pos(layout, 0, 0.9))
+    assert ship.thrust and ship.angle_rotation == 0
+    _release(touch, layout.stick)
+
+
+def test_touch_player_keeps_controls_while_others_use_keys(start_game):
+    game = start_game(slots=[('touch', 'left'), ('keys', 0), None, None])
+    touch, keys = game.controls[:2]
+    game.touch_settings.mode = 'off'    # joining by touch wins over it
+    game._set_touch_ui(False, force=True)
+    assert touch.touch_buttons.active and not keys.touch_buttons.active
+    game._on_key_down(None, ord('w'))
+    assert game.spaceships[1].thrust
+    assert touch.touch_buttons.active and not keys.touch_buttons.active
+    game.touch_settings.mode = 'auto'
+    game._on_window_touch(None, None)
+    assert not keys.touch_buttons.active
 
 
 # ---- ship appearance -----------------------------------------------------
@@ -1120,83 +1238,208 @@ def test_cabin_textures_are_cached_and_applied():
 
 def test_ship_colors_default_cycle_and_skip_taken():
     colors = main.ShipColors()
-    assert colors.colors == ['blue', 'green']
-    colors.cycle(0, 1)
+    assert colors.colors == ['blue', 'green', 'red', 'yellow']
+    colors.cycle(0, 1, players=2)
     assert colors.colors[0] == 'red'                # green is taken
-    colors.cycle(1, -1)
+    colors.cycle(1, -1, players=2)
     assert colors.colors[1] == 'blue'               # red taken, back to blue
     colors.cycle(0, 1, players=1)                   # only one player: free
     assert colors.colors[0] == 'yellow'
     for _ in range(20):
-        colors.cycle(0, 1)
+        colors.cycle(0, 1, players=2)
         assert colors.colors[0] != colors.colors[1]
+
+
+def test_ship_colors_skip_every_joined_player():
+    colors = main.ShipColors()
+    colors.colors = ['red', 'blue', 'purple', 'yellow']
+    seen = set()
+    for _ in range(12):
+        colors.cycle(1, 1, active=[0, 1, 2])        # slot 4 is empty
+        seen.add(colors.colors[1])
+    assert seen == {'blue', 'green', 'yellow', 'orange'}
+
+
+def test_ship_colors_claim_keeps_free_colour_or_takes_first_free():
+    colors = main.ShipColors()
+    colors.colors = ['green', 'green', 'red', 'yellow']
+    colors.claim(0, [0])
+    assert colors.colors[0] == 'green'              # nobody else: kept
+    colors.claim(1, [0, 1])
+    assert colors.colors[1] == 'blue'               # green taken: first free
+    colors.claim(3, [0, 1, 3])
+    assert colors.colors[3] == 'yellow'
 
 
 def test_ship_colors_persist_and_fall_back(tmp_path):
     path = str(tmp_path / 'colors.json')
     colors = main.ShipColors(path)
-    colors.colors = ['red', 'yellow']
+    colors.colors = ['red', 'yellow', 'purple', 'red']
     colors.save()
-    assert main.ShipColors(path).colors == ['red', 'yellow']
+    assert main.ShipColors(path).colors == ['red', 'yellow', 'purple', 'red']
+    with open(path, 'w') as f:
+        f.write('{"colors": ["orange", "purple"]}')    # saved for two players
+    assert main.ShipColors(path).colors == [
+        'orange', 'purple', 'red', 'yellow']
+    defaults = ['blue', 'green', 'red', 'yellow']
     for bad in ('nope', '[]', '{"colors": ["red"]}',
-                '{"colors": ["red", "red"]}', '{"colors": ["red", "pink"]}'):
+                '{"colors": ["red", "red", "red"]}',
+                '{"colors": ["red", "pink"]}'):
         with open(path, 'w') as f:
             f.write(bad)
-        assert main.ShipColors(path).colors == ['blue', 'green']
-    assert main.ShipColors(str(tmp_path / 'missing.json')).colors == [
-        'blue', 'green']
+        assert main.ShipColors(path).colors == defaults
+    assert main.ShipColors(str(tmp_path / 'missing.json')).colors == defaults
 
 
-def test_selection_preview_updates_before_the_game(kv_game):
-    game = kv_game
+def _join(game):
     game.ship_colors.path = None
     game.show_ship_select(2)
-    select = game.select
-    before = select.panels[0]['preview'].texture
-    game._on_key_down(None, ord('d'))               # player 1: next colour
-    game._on_key_up(None, ord('d'))
-    assert game.ship_colors.colors == ['red', 'green']
-    assert select.panels[0]['preview'].texture is not before
-    assert select.panels[0]['name'].text == 'Red'
-    assert game.spaceships == []                    # not started yet
+    return game.select
 
 
-def test_selection_player_two_uses_own_keys_and_confirm(kv_game):
-    game = kv_game
-    game.ship_colors.path = None
-    game.show_ship_select(2)
-    _press(game, ord('l'))                          # player 2: next colour
-    assert game.ship_colors.colors == ['blue', 'red']
-    _press(game, KEY_SPACE)                         # player 1 ready
-    assert game.select_active and len(game.spaceships) == 0
-    _press(game, ord('k'))                          # player 2 ready
-    assert not game.select_active
-    assert [s.cabin for s in game.spaceships] == ['blue', 'red']
-    assert len(game.controls) == 2
+def _pad(game, stick, button):
+    game._on_joy_button_down(None, stick, button)
+    game._on_joy_button_up(None, stick, button)
 
 
-def test_selection_ready_blocks_changes_and_back_cancels(kv_game):
-    game = kv_game
-    game.ship_colors.path = None
-    game.show_ship_select(2)
-    _press(game, KEY_SPACE)
-    _press(game, ord('d'))                          # ready: ignored
-    assert game.ship_colors.colors == ['blue', 'green']
-    _press(game, KEY_ESC)
-    assert game.menu in game.children and not game.select_active
-    assert game.spaceships == []
+def test_join_by_fire_in_order_and_once(kv_game):
+    join = _join(kv_game)
+    assert isinstance(join, main.JoinScreen)
+    assert join.slots == [None] * 4 and kv_game.spaceships == []
+    _press(kv_game, ord('d'))                   # no slot yet: nothing
+    assert join.slots == [None] * 4
+    _press(kv_game, KEY_SPACE)                  # keyboard set 1
+    assert join.slots[0] == ('keys', 0)
+    assert join.panels[0]['device'].text == 'Keys W A D Space'
+    _pad(kv_game, 1, 0)                         # a gamepad
+    assert join.slots[1] == ('pad', 1)
+    assert join.panels[1]['device'].text == 'Gamepad 2'
+    _press(kv_game, KEY_ENTER)                  # set 1 again: ready
+    assert join.slots[2] is None and join.ready[0]
 
 
-def test_selection_by_touch_buttons(kv_game):
-    game = kv_game
-    game.ship_colors.path = None
-    game.show_ship_select(2)
-    panels = game.select.panels
+def test_join_preview_updates_and_ready_blocks_changes(kv_game):
+    join = _join(kv_game)
+    _press(kv_game, KEY_SPACE)
+    before = join.panels[0]['preview'].texture
+    _press(kv_game, ord('d'))                   # next colour
+    assert kv_game.ship_colors.colors[0] == 'green'   # free: alone
+    assert join.panels[0]['preview'].texture is not before
+    assert join.panels[0]['name'].text == 'Green'
+    _press(kv_game, KEY_SPACE)                  # ready
+    _press(kv_game, ord('d'))
+    assert kv_game.ship_colors.colors[0] == 'green'
+    assert kv_game.spaceships == []
+
+
+def test_slots_light_up_and_players_set_up_together(kv_game):
+    join = _join(kv_game)
+    _press(kv_game, KEY_SPACE)                  # set 1 -> player 1
+    _press(kv_game, ord('k'))                   # set 2 -> player 2
+    _pad(kv_game, 1, 0)                         # pad -> player 3
+    assert join.slots[:3] == [('keys', 0), ('keys', 1), ('pad', 1)]
+    join.flashing = [False] * 4
+    kv_game._on_key_down(None, ord('d'))        # player 1 colour...
+    kv_game._on_joy_button_down(None, 1, 0)     # ...while player 3 is ready
+    assert join.flashing == [True, False, True, False]
+    assert kv_game.ship_colors.colors[:3] == ['yellow', 'green', 'red']
+    assert join.ready == [False, False, True, False]
+    assert join.panels[0]['border'].width > join.panels[1]['border'].width
+    join._unflash(0)
+    assert not join.flashing[0]
+
+
+def test_each_way_to_leave(kv_game):
+    join = _join(kv_game)
+    _press(kv_game, KEY_SPACE)
+    _pad(kv_game, 2, 0)
+    join.side_buttons['left'].dispatch('on_press')
+    assert join.slots == [('keys', 0), ('pad', 2), ('touch', 'left'), None]
+    _press(kv_game, ord('w'))                   # set 1 thrust key leaves
+    assert join.slots[0] is None
+    _pad(kv_game, 2, 6)                         # the joined pad's Back
+    assert join.slots[1] is None and kv_game.select_active
+    join.panels[2]['leave'].dispatch('on_press')
+    assert join.slots == [None] * 4
+    _press(kv_game, KEY_SPACE)                  # free to join again
+    assert join.slots[0] == ('keys', 0)
+
+
+def test_escape_or_unjoined_pad_back_returns_to_menu(kv_game):
+    _join(kv_game)
+    _press(kv_game, KEY_SPACE)
+    _press(kv_game, KEY_ESC)
+    assert kv_game.menu in kv_game.children and not kv_game.select_active
+    _join(kv_game)
+    _pad(kv_game, 4, 7)                         # Start of a pad not joined
+    assert kv_game.menu in kv_game.children
+    assert kv_game.spaceships == []
+
+
+def test_touch_joins_from_a_side_strip(kv_game):
+    join = _join(kv_game)
+    left, right = join.side_buttons['left'], join.side_buttons['right']
+    assert left.text == right.text == 'Tap to join by touch'
+    assert left._turn.angle == -90 and right._turn.angle == 90   # to the seat
+    _press(kv_game, KEY_SPACE)                  # keyboard player 1
+    right.dispatch('on_press')                  # first free slot, right side
+    assert join.slots[:2] == [('keys', 0), ('touch', 'right')]
+    assert join.panels[1]['device'].text == 'Touch · right side'
+    assert right.disabled and right.text == 'Player 2 · touch'
+    right.dispatch('on_press')                  # side taken: nothing
+    assert join.slots[2] is None
+    assert join.join_touch('right') is None
+    left.dispatch('on_press')
+    assert join.slots[2] == ('touch', 'left') and left.disabled
+    _pad(kv_game, 0, 0)                         # pads still join
+    assert join.slots[3] == ('pad', 0)
+    join.leave(1)                               # right side free again
+    assert not right.disabled and right.text == 'Tap to join by touch'
+    right.dispatch('on_press')
+    assert join.slots[1] == ('touch', 'right')
+
+
+def test_side_strips_are_at_the_screen_edges(kv_game):
+    from kivy.core.window import Window
+    join = _join(kv_game)
+    join.do_layout()
+    left, right = join.side_buttons['left'], join.side_buttons['right']
+    assert left.x < main.dp(10)
+    assert right.right > Window.width - main.dp(10)
+    assert left.height == join.height
+    middle = join.panels[0]['panel'].parent.parent  # panels + Back row
+    assert left.right < middle.x and right.x > middle.right
+
+
+def test_start_needs_two_joined_players_all_ready(kv_game):
+    join = _join(kv_game)
+    _press(kv_game, KEY_SPACE)                  # join
+    _press(kv_game, KEY_SPACE)                  # ready, but alone
+    assert kv_game.select_active
+    assert 'two players' in join.message.text
+    _press(kv_game, ord('k'))                   # set 2 joins as player 2
+    _press(kv_game, ord('l'))                   # next colour: red
+    assert kv_game.select_active
+    _press(kv_game, ord('k'))                   # ready: everyone is
+    assert not kv_game.select_active
+    assert [s.cabin for s in kv_game.spaceships] == ['blue', 'red']
+    assert kv_game.slots == [('keys', 0), ('keys', 1), None, None]
+    kv_game._on_key_down(None, ord('i'))
+    assert kv_game.spaceships[1].thrust and not kv_game.spaceships[0].thrust
+
+
+def test_join_by_touch_buttons_only(kv_game):
+    join = _join(kv_game)
+    panels = join.panels
+    join.side_buttons['left'].dispatch('on_press')
+    join.side_buttons['right'].dispatch('on_press')
     panels[1]['next'].dispatch('on_press')
-    assert game.ship_colors.colors[1] == 'red'
+    assert kv_game.ship_colors.colors[1] == 'red'
     panels[0]['ready'].dispatch('on_press')
     panels[1]['ready'].dispatch('on_press')
-    assert len(game.spaceships) == 2
+    assert len(kv_game.spaceships) == 2
+    assert [c.touch_buttons.side for c in kv_game.controls[:2]] == [
+        'left', 'right']
 
 
 def test_selection_single_player_any_input_and_second_pad(kv_game):
@@ -1210,16 +1453,13 @@ def test_selection_single_player_any_input_and_second_pad(kv_game):
     assert len(game.spaceships) == 1 and game.spaceships[0].cabin == 'green'
 
 
-def test_multiplayer_menu_entry_leads_to_two_ships(kv_game):
+def test_multiplayer_menu_entry_opens_join_screen(kv_game):
     game = kv_game
     game.ship_colors.path = None
-    _press(game, 274)                               # Multiplayer
+    _press(game, 274)                           # Multiplayer
     _press(game, KEY_ENTER)
-    assert game.select.players == 2
-    game.select.toggle_ready(0)
-    game.select.toggle_ready(1)
-    assert len(game.spaceships) == 2
-    assert game.num_players == 2
+    assert isinstance(game.select, main.JoinScreen)
+    assert game.select.slots == [None] * 4      # opening it joined nobody
 
 
 def test_second_gamepad_navigates_menu(kv_game):
@@ -1227,14 +1467,14 @@ def test_second_gamepad_navigates_menu(kv_game):
     game._on_joy_axis(None, 0, 1, 32767)            # pad 0: down
     game._on_joy_axis(None, 0, 1, 0)
     game._on_joy_button_down(None, 1, 0)            # pad 1: activate
-    assert game.select_active and game.select.players == 2
+    assert game.select_active and isinstance(game.select, main.JoinScreen)
 
 
 def test_status_text_is_turned_toward_each_player(kv_game):
     from kivy.graphics import Rotate
     game = kv_game
     game.ship_colors.path = None
-    game.game_start(2)
+    game.game_start(slots=TOUCH2)
 
     def angle(status):
         label = status.children[0]
@@ -1249,8 +1489,38 @@ def test_status_text_is_turned_toward_each_player(kv_game):
     assert angle(game.statuses[0]) == 0
 
 
-def test_fire_label_is_turned_toward_each_player(game, game2):
-    one, two = [c.touch_buttons for c in game2.controls]
+def test_mixed_game_status_positions_angles_and_colours(kv_game):
+    from kivy.core.window import Window
+    from kivy.graphics import Rotate
+    game = kv_game
+    game.ship_colors.path = None
+    game.game_start(slots=[('keys', 0), ('touch', 'left'), ('pad', 2),
+                           ('touch', 'right')])
+    keys, left, pad, right = game.statuses
+
+    def label(status):
+        return status.children[0]
+
+    def angle(status):
+        return [i.angle for i in label(status).canvas.before.children
+                if isinstance(i, Rotate)][0]
+
+    assert [s.side for s in game.statuses] == ['top', 'left', 'top', 'right']
+    assert [angle(s) for s in game.statuses] == [0, -90, 0, 90]
+    for status, column in ((keys, 0), (pad, 2)):
+        assert label(status).center_x == pytest.approx(
+            Window.width * (column + 0.5) / 4)
+        assert label(status).center_y == pytest.approx(Window.height - 50)
+    assert label(left).center_x == pytest.approx(main.cm(2.7))
+    assert label(right).center_x == pytest.approx(Window.width - main.cm(2.7))
+    assert label(left).center_y == pytest.approx(Window.height / 2)
+    for status in game.statuses:
+        assert tuple(status.color[:3]) == pytest.approx(
+            main.cabin_rgb(status.spaceship.cabin))
+
+
+def test_fire_label_is_turned_toward_each_player(game, touch2):
+    one, two = [c.touch_buttons for c in touch2.controls]
     for layout in (one, two):
         layout.size = (1000, 600)
     assert one.fire.text_angle == -90 and one.fire._label_turn.angle == -90

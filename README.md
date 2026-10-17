@@ -60,21 +60,26 @@ Android TV remote D-pad arrives as arrow keys, centre button fires.
 
 ### Multiplayer
 
-**Multiplayer** in the main menu starts a local two-player co-op game on one screen: both ships fly in the same field and shoot the same asteroids, each with its own lives and points (shown in the colour of its cabin, player 1 on the left, player 2 on the right). A ship that loses its last life leaves the field; the game ends when both are out. Before every game (single player too) a selection screen shows the ships so each player can pick a cabin colour with `<` / `>` (turn keys on the keyboard) and press *Ready* (fire). Two players cannot pick the same colour; the choice is saved in `ship_colors.json`.
+**Multiplayer** in the main menu opens a join screen for a local co-op game of two to four players on one screen: all ships fly in the same field and shoot the same asteroids, each with its own lives and points. A ship that loses its last life leaves the field; the game ends when all are out.
 
-| | Player 1 | Player 2 |
-|---|---|---|
-| Keyboard (defaults) | W / A / D + Space (arrow keys and Enter also work) | I / J / L + K |
-| Gamepad | first gamepad that sends input | second gamepad |
-| Touch | left edge: stick at the top, FIRE in the bottom corner | right edge: FIRE at the top, stick in the bottom corner |
+On the join screen every player takes a slot with the device they will play with:
 
-With the touch controls the two players sit on opposite sides of the device with the screen between them: each has the stick under the left hand and FIRE under the right hand from their seat: one control in the bottom corner and the other at the top of their side, the two sides being the same shape turned half a circle.
+| Device | Join | Colour | Ready | Leave |
+|---|---|---|---|---|
+| Keyboard set 1 (W / A / D + Space; arrow keys and Enter also count as set 1) | Space | A / D | Space | W |
+| Keyboard set 2 (I / J / L + K) | K | J / L | K | I |
+| Gamepad | A / X (fire) | stick or D-pad left / right | A / X | Back / Start |
+| Touch | *Tap to join by touch* strip at the left or right edge, on the side where you sit | `<` / `>` | *Ready* | *Leave* |
 
-Both keyboard sets work at the same time (very cheap keyboards may not report six held keys at once; the keys are rebindable). One gamepad drives player 1 only, so player 2 can use the keyboard or the touchscreen while player 1 uses the gamepad. In a single-player game any gamepad drives the ship and the second keyboard set is ignored.
+Every device, a side strip included, takes the first free slot; a strip is greyed out while a touch player sits on its side. Each slot shows the device that joined it and lights up when that device is used, so everyone sees which keys or pad belong to which ship, and players can set up at the same time. At most two players share the keyboard (two sets) and at most two play by touch; further players use gamepads (up to four players). The game starts when at least two players have joined and all of them are *Ready*. Escape, or Back / Start on a pad that has not joined, returns to the menu. Players cannot pick the same cabin colour; the choice of each slot is saved in `ship_colors.json`. Single player keeps a one-ship selection screen that any keyboard set or gamepad drives.
+
+In the game each device drives only the ship it joined with; devices that did not join are ignored except Back / Escape, which ends the game. Touch players sit at the left and right sides of the device, facing each other, on the side whose strip they tapped: each has the stick under the left hand and FIRE under the right hand from their seat, one control in the bottom corner and the other at the top of their side. Their stick is turned toward them: push it away from you (toward the middle of the screen) to thrust, and to your own left / right to turn. Their controls stay shown for the whole game, whatever the touch setting; keyboard and gamepad players get none. A touch player's lives and points are in the middle of their side, turned toward them; keyboard and gamepad players sit in front of the screen and their lives and points run along the top in player order. Each block is in the colour of the player's cabin.
+
+Both keyboard sets work at the same time (very cheap keyboards may not report six held keys at once; the keys are rebindable). In a single-player game any keyboard set and any gamepad drives the ship.
 
 Touch controls are a joystick overlay (draggable stick bottom-left: up thrusts, left / right turn, in-between positions combine them; square red FIRE button bottom-right). They appear on any device as soon as the screen is touched and hide again when a keyboard key or gamepad input is used, so keyboard, gamepad and touch can be mixed freely. **Settings > Touch controls** switches between Auto (default), On (always shown) and Off, and sets the size of the controls with a slider (50-400%, left / right keys also work; applied to the next game and limited to what fits on screen); the choices are saved in `touch_ui.json` in the app's user data directory.
 
-Keyboard keys for thrust, turn left, turn right and fire can be changed in **Settings > Keyboard layout** in the main menu: pick an action, then press the new key (Escape cancels). The *Keys of: Player* button switches between the sets of player 1 (defaults W / A / D / Space) and player 2 (I / J / L / K); **Reset to defaults** restores both. Arrow keys, Enter and Escape are fixed (arrows and Enter always steer / fire player 1) so the menus always stay reachable, and a key already used by any action of either player is refused. Bindings of both players are saved in `keybindings.json` (physical keys, so they work on any keyboard layout; files from versions with one set are read as player 1) in the app's user data directory.
+Keyboard keys for thrust, turn left, turn right and fire can be changed in **Settings > Keyboard layout** in the main menu: pick an action, then press the new key (Escape cancels). The *Keys of: Set* button switches between keyboard set 1 (defaults W / A / D / Space) and set 2 (I / J / L / K); **Reset to defaults** restores both. Arrow keys, Enter and Escape are fixed (arrows and Enter always count as set 1) so the menus always stay reachable, and a key already used by any action of either set is refused. Bindings of both sets are saved in `keybindings.json` (physical keys, so they work on any keyboard layout; files from versions with one set are read as set 1) in the app's user data directory.
 
 ### Build for Android
 
@@ -126,15 +131,15 @@ buildozer android release
 
 - on-screen touch controls: joystick and a red FIRE button instead of four square buttons, shown on any device once touched and hidden while a keyboard or gamepad is used; Settings > Touch controls has Auto / On / Off and a size slider (50-400%)
 
-- local multiplayer for two players on one device: shared asteroids, separate lives and points, keyboard sets, two gamepads or two touch control sets, one on each side of the screen with texts turned toward the players
+- local multiplayer for two to four players on one device: a join screen where each player joins and leaves with their own device (one of two keyboard sets, a gamepad, or touch for up to two players at the sides of the screen), shared asteroids, separate lives and points
 
-- ship selection screen before every game with a cabin colour (blue, green, red, yellow, purple, orange) and a preview of the ship
+- cabin colour (blue, green, red, yellow, purple, orange) with a preview of the ship before every game
 
-- second keyboard set (I / J / L / K) and per-player key bindings; saved bindings of older versions are kept for player 1
+- second keyboard set (I / J / L / K) with its own key bindings; saved bindings of older versions are kept for set 1
 
 ## Copyright and License
 
-Copyright 2016 - 2017, 2024 Egor Poderiagin.
+Copyright 2016 - 2017, 2024, 2026 Egor Poderiagin.
 
 All source code released under MIT license, more details in LICENSE file.
 
