@@ -59,6 +59,7 @@
 
 <SpaceshipStatus>:
     Label:
+        id: text_label
         # one player: top right. Multiplayer: a touch player's block is at
         # the middle of their side, just inside their touch controls (the
         # turned text is one line high across), turned so that it reads
@@ -79,6 +80,27 @@
         text: ("Lives {}  Points {}" if root.side == 'top' else "Lives {:<5} Points {}").format(root.spaceship.lives, root.spaceship.points)
         font_size: "17dp" if root.side == 'top' else "23dp"
         font_name: 'data/fonts/RobotoMono-Regular.ttf'
+
+    MenuButton:
+        # under the lives and points as the player reads them: below the
+        # text for one player; for a touch player's turned text (middle of
+        # their side, between their two controls) on the screen-edge side
+        text: "Menu"
+        font_size: "12dp"
+        size_hint: None, None
+        size: metrics.dp(44), metrics.dp(44)
+        opacity: 1 if root.show_menu else 0
+        disabled: not root.show_menu
+        center_x: text_label.center_x if root.side == '' else (text_label.center_x - text_label.texture_size[1] / 2 - metrics.dp(28) if root.side == 'left' else text_label.center_x + text_label.texture_size[1] / 2 + metrics.dp(28))
+        center_y: text_label.center_y - text_label.texture_size[1] / 2 - metrics.dp(28) if root.side == '' else text_label.center_y
+        on_press: root.parent.game_stop()
+        canvas.before:
+            PushMatrix
+            Rotate:
+                angle: -90 if root.side == 'left' else (90 if root.side == 'right' else 0)
+                origin: self.center
+        canvas.after:
+            PopMatrix
 
 
 <Menu>:

@@ -1,4 +1,4 @@
-__version__ = "0.2.1"
+__version__ = "0.3.2"
 
 import colorsys
 import json
@@ -426,6 +426,32 @@ def is_android_tv():
         return False
 
 
+def hide_system_bars():
+    """Android: hide the status and navigation bars (swipe from the edge
+    shows them for a moment), so they do not cover the touch controls."""
+    if platform != 'android':
+        return
+    try:
+        from jnius import autoclass
+        from android.runnable import run_on_ui_thread
+
+        @run_on_ui_thread
+        def hide():
+            activity = autoclass('org.kivy.android.PythonActivity').mActivity
+            window = activity.getWindow()
+            decor = window.getDecorView()
+            # IMMERSIVE_STICKY | HIDE_NAVIGATION | FULLSCREEN | LAYOUT_*
+            decor.setSystemUiVisibility(0x1000 | 0x2 | 0x4 | 0x100 | 0x200 | 0x400)
+            controller = window.getInsetsController()
+            if controller is not None:       # Android 11+
+                bars = autoclass('android.view.WindowInsets$Type').systemBars()
+                controller.hide(bars)
+                controller.setSystemBarsBehavior(2)  # transient by swipe
+        hide()
+    except Exception:
+        pass
+
+
 def has_touchscreen():
     """Whether the device has a touchscreen. Android TV usually has none;
     on desktops a mouse click arrives as a touch, so count it as one."""
@@ -571,8 +597,14 @@ class Spaceship(Widget):
         self.parent.add_widget(shot)
 
 
+class MenuButton(Button):
+    """Touch players have no Back key: this returns to the main menu. It is
+    square, so that it can be turned with its player's status block."""
+
+
 class SpaceshipStatus(Widget):
     spaceship = ObjectProperty()
+    show_menu = BooleanProperty(False)  # touch player: show the Menu button
     # '' one player (top right); multiplayer: 'left' / 'right' for a touch
     # player's side, 'top' for keyboard and gamepad players
     side = StringProperty('')
@@ -826,7 +858,11 @@ class FireButton(Widget):
         return False
 
 
-MARGIN_CM = 1.0   # space between the touch controls and the screen edges
+# Touch controls at 100%, in dp so that they follow the device's own density
+# (the screen DPI Kivy measures is unreliable on Android): about a thumb.
+STICK_DP = 110
+FIRE_DP = 76
+MARGIN_DP = 30    # space between the touch controls and the screen edges
 
 
 class Joystick(Widget):
@@ -959,9 +995,9 @@ class ScreenButtonsLayout(Widget):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.scale = 1.0
-        self.stick = Joystick(size=(cm(3.4), cm(3.4)), size_hint=(None, None))
+        self.stick = Joystick(size=(dp(STICK_DP), dp(STICK_DP)), size_hint=(None, None))
         self.add_widget(self.stick)
-        self.fire = FireButton(size=(cm(2), cm(2)), size_hint=(None, None))
+        self.fire = FireButton(size=(dp(FIRE_DP), dp(FIRE_DP)), size_hint=(None, None))
         self.add_widget(self.fire)
         self.bind(size=self._layout)
         self._layout()
@@ -970,18 +1006,25 @@ class ScreenButtonsLayout(Widget):
         self.scale = scale
         self._layout()
 
+    def _base_sizes(self):
+        """Joystick and FIRE size at 100%, but on a small screen no more
+        than 40% and 25% of its height."""
+        return (min(dp(STICK_DP), self.height * 0.4),
+                min(dp(FIRE_DP), self.height * 0.25))
+
     def _layout(self, *args):
         # keep a margin to the screen edges; controls are never larger than
         # the window height and half its width allow, so they do not overlap
-        margin = cm(MARGIN_CM)
+        margin = dp(MARGIN_DP)
         if self.side:
             self._layout_side(margin)
             return
         limit = max(min(self.height - margin - cm(0.5),
                         self.width / 2 - margin * 1.5), cm(1))
-        side = min(cm(3.4) * self.scale, limit)
+        stick, fire = self._base_sizes()
+        side = min(stick * self.scale, limit)
         self.stick.size = (side, side)
-        side = min(cm(2) * self.scale, limit)
+        side = min(fire * self.scale, limit)
         self.fire.size = (side, side)
         self.stick.pos = (margin, margin)
         self.fire.pos = (self.width - margin - self.fire.width, margin)
@@ -994,10 +1037,10 @@ class ScreenButtonsLayout(Widget):
         joystick at the top and FIRE in the bottom corner; player 2 (right
         side, facing left) FIRE at the top and the joystick in the bottom
         corner, so the two sides are the same turned half a circle. The top
-        control sits just below the status text."""
+        control sits just below the top row of status text."""
         gap = cm(0.3)
-        top_room = cm(2)
-        stick, fire = cm(3.4) * self.scale, cm(2) * self.scale
+        top_room = dp(40)
+        stick, fire = (size * self.scale for size in self._base_sizes())
         room_h = max(self.height - margin - top_room - gap, cm(2))
         shrink = min(1.0, room_h / (stick + fire))
         room_w = max(self.width / 2 - margin * 2, cm(1))
@@ -1666,9 +1709,14 @@ class SpacePilgrimGame(Widget):
         players never; in single player the touch setting decides."""
         for controls in self.controls:
             if controls is not None:
-                controls.show_touch_buttons(
-                    self.touch_ui if controls.touch == 'auto'
-                    else controls.touch == 'on')
+                visible = (self.touch_ui if controls.touch == 'auto'
+                           else controls.touch == 'on')
+                controls.show_touch_buttons(visible)
+                # touch play has no Back key: the player's status block
+                # offers the way back to the menu
+                for status in self.statuses:
+                    if status.spaceship is controls.spaceship:
+                        status.show_menu = visible
 
     def _on_window_touch(self, window, touch):
         self._set_touch_ui(True)
@@ -2000,12 +2048,16 @@ class SpacePilgrimApp(App):
     use_kivy_settings = False
 
     def build(self):
+        hide_system_bars()
         game = SpacePilgrimGame()
         game.game_stop()
         return game
 
     def on_pause(self):
         return True
+
+    def on_resume(self):
+        hide_system_bars()
 
 if __name__ == '__main__':
     SpacePilgrimApp().run()

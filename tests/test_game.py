@@ -707,7 +707,7 @@ def test_scale_changes_control_size(game):
     base = layout.stick.width
     layout.set_scale(1.5)
     assert layout.stick.width == pytest.approx(base * 1.5)
-    assert layout.fire.width == pytest.approx(main.cm(2) * 1.5)
+    assert layout.fire.width == pytest.approx(main.dp(main.FIRE_DP) * 1.5)
     assert layout.fire.right <= 1000
 
 
@@ -725,7 +725,7 @@ def test_huge_scale_stays_on_screen(game):
 def test_controls_keep_margin_from_screen_edges(game):
     layout = game.spaceship_controls.touch_buttons
     layout.size = (1000, 600)
-    margin = main.cm(main.MARGIN_CM)
+    margin = main.dp(main.MARGIN_DP)
     assert layout.stick.x == pytest.approx(margin)
     assert layout.stick.y == pytest.approx(margin)
     assert layout.fire.y == pytest.approx(margin)
@@ -827,7 +827,7 @@ def test_game_start_applies_saved_scale():
         g.game_start()
         layout = g.spaceship_controls.touch_buttons
         layout.size = (1000, 600)
-        assert layout.stick.width == pytest.approx(main.cm(3.4) * 1.5)
+        assert layout.stick.width == pytest.approx(main.dp(main.STICK_DP) * 1.5)
     finally:
         g.frame_schedule.cancel()
         g.asteroid_schedule.cancel()
@@ -1081,7 +1081,7 @@ def _touch_layouts(game):
 @pytest.mark.parametrize('size', [(800, 480), (1000, 600), (1920, 1080)])
 @pytest.mark.parametrize('scale', [1.0, 4.0])
 def test_two_touch_sets_are_columns_on_each_side(touch2, scale, size):
-    margin = main.cm(main.MARGIN_CM)
+    margin = main.dp(main.MARGIN_DP)
     left, right = [c.touch_buttons for c in touch2.controls]
     for layout in (left, right):
         layout.size = size
@@ -1094,7 +1094,7 @@ def test_two_touch_sets_are_columns_on_each_side(touch2, scale, size):
     # controls at the two ends of each side, under the status text at the
     # top; seen from their seats both have the stick under the left hand:
     # player 1 stick on top, player 2 stick at the bottom
-    top = h - main.cm(2)
+    top = h - main.dp(40)
     assert left.fire.y == pytest.approx(margin)
     assert left.stick.top == pytest.approx(top)
     assert right.stick.y == pytest.approx(margin)
@@ -1499,7 +1499,7 @@ def test_mixed_game_status_positions_angles_and_colours(kv_game):
     keys, left, pad, right = game.statuses
 
     def label(status):
-        return status.children[0]
+        return status.children[-1]
 
     def angle(status):
         return [i.angle for i in label(status).canvas.before.children
@@ -1532,7 +1532,7 @@ def test_touch_status_never_overlaps_its_controls(kv_game, scale):
     game.game_start(slots=[('touch', 'left'), ('touch', 'right')])
     for status, controls in zip(game.statuses, game.controls):
         layout = controls.touch_buttons
-        label = status.children[0]
+        label = status.children[-1]
         label.texture_update()      # text is otherwise rendered next frame
         half = label.texture_size[1] / 2
         text_left, text_right = label.center_x - half, label.center_x + half
@@ -1594,3 +1594,65 @@ def test_first_touch_shows_join_strips(kv_game):
 
 def test_has_touchscreen_off_android():
     assert main.has_touchscreen() is True       # desktop: mouse clicks
+
+
+from kivy.core.window import Window
+
+
+def _menu_button(status):
+    return next(c for c in status.children if c.__class__.__name__ == 'MenuButton')
+
+
+def test_menu_button_follows_touch_controls(kv_game):
+    game = kv_game
+    game.game_start()
+    button = _menu_button(game.spaceship_status)
+    # keyboard play: no way back needed on screen; a touch shows the button
+    assert button.opacity == 0 and button.disabled
+    game._on_window_touch(None, None)
+    assert button.opacity == 1 and not button.disabled
+    game._on_key_down(None, KEY_UP)
+    assert button.opacity == 0 and button.disabled
+
+
+def test_single_player_menu_button_is_under_the_points(kv_game):
+    game = kv_game
+    game.game_start()
+    game._on_window_touch(None, None)
+    status = game.spaceship_status
+    button = _menu_button(status)
+    label = status.children[-1]
+    assert button.center_x == label.center_x
+    assert button.top < label.center_y - label.texture_size[1] / 2
+
+
+def test_menu_button_returns_to_menu(kv_game):
+    game = kv_game
+    game.game_start()
+    game._on_window_touch(None, None)
+    _menu_button(game.spaceship_status).dispatch('on_press')
+    assert game.menu_active
+
+
+def test_touch_players_menu_buttons_are_mid_side_under_the_text(
+        kv_game, start_game):
+    game = start_game(slots=TOUCH2)
+    left, right = game.statuses
+    for status, inner in ((left, 1), (right, -1)):
+        button = _menu_button(status)
+        label = status.children[-1]
+        assert button.opacity == 1 and not button.disabled
+        assert button.center_y == label.center_y == pytest.approx(
+            Window.height / 2)
+        assert (button.center_x - label.center_x) * inner < 0
+    _menu_button(left).dispatch('on_press')
+    assert game.menu_active
+
+
+def test_touch_controls_are_capped_on_a_small_screen():
+    layout = main.ScreenButtonsLayout(size=(900, 400))
+    assert layout.stick.width <= 400 * 0.4 + 1e-6
+    assert layout.fire.width <= 400 * 0.25 + 1e-6
+    tall = main.ScreenButtonsLayout(size=(3000, 3000))
+    assert tall.stick.width == pytest.approx(main.dp(main.STICK_DP))
+    assert tall.fire.width == pytest.approx(main.dp(main.FIRE_DP))

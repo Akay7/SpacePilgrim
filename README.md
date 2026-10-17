@@ -130,7 +130,7 @@ buildozer android release
 
 - renamed from Rice Rocks to Space Pilgrim
 
-### Next version
+### 0.3.0
 
 - main menu with Single player, Multiplayer, Settings and Exit instead of the splash screen
 
@@ -147,6 +147,22 @@ buildozer android release
 - cabin colour (blue, green, red, yellow, purple, orange) with a preview of the ship before every game
 
 - second keyboard set (I / J / L / K) with its own key bindings; saved bindings of older versions are kept for set 1
+
+### 0.3.1
+
+- Android: the system status and navigation bars are hidden while playing (swipe from the screen edge shows them), so they no longer cover the touch controls
+
+- a Menu button returns from a touch game to the main menu (touch has no Back key)
+
+- touch controls are sized in dp instead of cm, so a wrongly reported screen DPI no longer makes them huge, and never take more than 40% / 25% of the screen height on small screens
+
+### 0.3.2
+
+- smaller, finger-sized touch controls by default (joystick 110 dp, FIRE 76 dp)
+
+- two touch players on a small screen: joystick and FIRE sit in the corners of each side instead of being pushed toward the middle
+
+- the Menu button sits under the lives and points text: below it for one player, at the middle of the side (between the two controls) for each touch player, so it is not pressed by mistake
 
 ## Copyright and License
 
