@@ -112,11 +112,15 @@ In a multiplayer game all ships SHALL share the same asteroids. Each ship SHALL 
 - **THEN** player 1's ship disappears and the game continues for the others
 
 ### Requirement: Game end in multiplayer
-A multiplayer game SHALL end and return to the main menu when all ships are out of lives, or when Back/Escape or a joined gamepad's Back/Start button is pressed.
+A multiplayer game SHALL end when all ships are out of lives, and then the results screen SHALL be shown (see game-results). Back/Escape or a joined gamepad's Back/Start button SHALL pause the game instead; the game then ends only through "Main menu" on the pause screen.
 
 #### Scenario: All ships lost
 - **WHEN** the last ship loses its last life
-- **THEN** the game ends and the main menu is shown
+- **THEN** the game ends and the results screen is shown
+
+#### Scenario: Back in multiplayer
+- **WHEN** Back/Escape is pressed during a multiplayer game
+- **THEN** the game is paused, not ended
 
 ### Requirement: Touch seats
 At most two players SHALL play on the touch screen. They SHALL sit at the left and right sides of the screen, facing each other. A player who joins by touch SHALL sit on the side whose join strip they tapped, and the joined slot SHALL name that side.

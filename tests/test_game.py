@@ -88,7 +88,7 @@ def test_shot_destroys_asteroid_and_scores(game):
     assert len(game.explosions) == 1
 
 
-def test_asteroid_hit_costs_life_then_game_over(game):
+def test_asteroid_hit_costs_life_then_game_over(game, kv):
     ship = game.spaceships[0]
     for expected in (2, 1, 0):
         asteroid = Asteroid()
@@ -99,7 +99,7 @@ def test_asteroid_hit_costs_life_then_game_over(game):
         assert ship.lives == expected
 
     assert game.spaceships == []
-    assert game.menu in game.children
+    assert game.results_active
 
 
 # ---- input: keyboard, gamepad, touch buttons, menu navigation ------------
@@ -186,24 +186,34 @@ def test_touch_buttons_use_same_actions(game):
     assert ship.angle_rotation == 0
 
 
-def test_back_returns_to_menu(game):
+def test_back_pauses_the_game(game):
     game._on_key_down(None, KEY_ESC)
-    assert game.menu in game.children
-    assert not hasattr(game, 'spaceship_controls')
+    assert game.paused and game.menu not in game.children
+    assert game.spaceships
 
 
-def test_android_back_in_game_is_consumed_after_returning_to_menu(game, monkeypatch):
+def test_android_back_in_game_is_consumed(game, monkeypatch):
     # Kivy sends on_keyboard right after on_key_down; Back must not also
-    # pause the app on Android just because the menu is now showing.
+    # pause the app on Android: it pauses the game.
     import main
     monkeypatch.setattr(main, 'platform', 'android')
     game._on_key_down(None, KEY_ESC)
-    assert game.menu_active
+    assert game.paused
     assert game._on_keyboard(None, KEY_ESC) is True
-    # a second Back, now from the menu itself, is left to Android
+    # from the main menu, Back is left to Android
+    game.game_stop()
     game._on_key_up(None, KEY_ESC)
     game._on_key_down(None, KEY_ESC)
     assert game._on_keyboard(None, KEY_ESC) is None
+
+
+@pytest.fixture
+def kv():
+    # results and leaderboard screens are declared in spacepilgrim.kv
+    from kivy.lang import Builder
+    Builder.load_file('spacepilgrim.kv')
+    yield
+    Builder.unload_file('spacepilgrim.kv')
 
 
 @pytest.fixture
@@ -221,7 +231,8 @@ def test_menu_keyboard_navigation(kv_game):
     assert game.menu.selected == 0
     game._on_key_down(None, 274)  # down
     labels = [b.text for b in game.menu.buttons]
-    assert labels == ['Single player', 'Multiplayer', 'Settings', 'Exit']
+    assert labels == ['Single player', 'Multiplayer', 'Leaderboard',
+                      'Settings', 'Exit']
     assert game.menu.selected == 1
     game._on_key_up(None, 274)
     game._on_key_down(None, 273)  # up wraps back
@@ -408,6 +419,7 @@ def test_rebound_key_drives_ship(game):
 
 def _open_settings(game):
     _press(game, 274)              # down to Multiplayer
+    _press(game, 274)              # down to Leaderboard
     _press(game, 274)              # down to Settings
     game._on_key_down(None, KEY_ENTER)
     game._on_key_up(None, KEY_ENTER)
@@ -468,7 +480,7 @@ def test_settings_rebind_fire_in_game(kv_game):
     assert game.settings.buttons[3].text == 'Fire: F'
     assert game.settings.waiting == ''
     game.close_settings()
-    game.menu.move(-2)                   # back to "Single player"
+    game.menu.move(-3)                   # back to "Single player"
     _press(game, KEY_ENTER)              # ship selection
     _press(game, KEY_ENTER)              # ready: start the game
     game._on_key_down(None, KEY_F)
@@ -993,10 +1005,10 @@ def test_four_player_start(start_game):
     assert game.shots[0].spaceship is ships[2]
 
 
-def test_joined_pad_back_ends_game(start_game):
+def test_joined_pad_back_pauses_game(start_game):
     game = start_game(slots=[('pad', 0), ('keys', 0), None, None])
     game._on_joy_button_down(None, 0, 7)        # Start
-    assert game.menu in game.children and game.spaceships == []
+    assert game.paused and game.spaceships
 
 
 def test_any_gamepad_drives_single_ship(game):
@@ -1044,20 +1056,20 @@ def test_one_ship_out_other_keeps_playing(game2):
     assert game2.shots[0].spaceship is two
 
 
-def test_game_ends_when_both_ships_are_out(game2):
+def test_game_ends_when_both_ships_are_out(game2, kv):
     one, two = game2.spaceships
     for _ in range(3):
         _hit(game2, one)
     for _ in range(3):
         _hit(game2, two)
     assert game2.spaceships == []
-    assert game2.menu in game2.children
+    assert game2.results_active
     assert game2.controls == []
 
 
-def test_back_from_any_player_ends_two_player_game(game2):
+def test_back_from_any_player_pauses_two_player_game(game2):
     game2._on_joy_button_down(None, 1, 6)
-    assert game2.menu in game2.children
+    assert game2.paused and game2.spaceships
 
 
 def test_one_status_block_per_ship(game2, game):
@@ -1599,14 +1611,14 @@ def test_has_touchscreen_off_android():
 from kivy.core.window import Window
 
 
-def _menu_button(status):
-    return next(c for c in status.children if c.__class__.__name__ == 'MenuButton')
+def _pause_button(status):
+    return next(c for c in status.children if c.__class__.__name__ == 'PauseButton')
 
 
-def test_menu_button_follows_touch_controls(kv_game):
+def test_pause_button_follows_touch_controls(kv_game):
     game = kv_game
     game.game_start()
-    button = _menu_button(game.spaceship_status)
+    button = _pause_button(game.spaceship_status)
     # keyboard play: no way back needed on screen; a touch shows the button
     assert button.opacity == 0 and button.disabled
     game._on_window_touch(None, None)
@@ -1615,38 +1627,41 @@ def test_menu_button_follows_touch_controls(kv_game):
     assert button.opacity == 0 and button.disabled
 
 
-def test_single_player_menu_button_is_under_the_points(kv_game):
+def test_single_player_pause_button_is_under_the_points(kv_game):
     game = kv_game
     game.game_start()
     game._on_window_touch(None, None)
     status = game.spaceship_status
-    button = _menu_button(status)
+    button = _pause_button(status)
     label = status.children[-1]
     assert button.center_x == label.center_x
     assert button.top < label.center_y - label.texture_size[1] / 2
 
 
-def test_menu_button_returns_to_menu(kv_game):
+def test_pause_button_pauses_and_main_menu_leaves(kv_game):
     game = kv_game
     game.game_start()
     game._on_window_touch(None, None)
-    _menu_button(game.spaceship_status).dispatch('on_press')
-    assert game.menu_active
+    _pause_button(game.spaceship_status).dispatch('on_press')
+    assert game.paused and not game.menu_active
+    game.pause_screen.go_menu()
+    game.confirm_screen.yes()
+    assert game.menu_active and not game.paused
 
 
-def test_touch_players_menu_buttons_are_mid_side_under_the_text(
+def test_touch_players_pause_buttons_are_mid_side_under_the_text(
         kv_game, start_game):
     game = start_game(slots=TOUCH2)
     left, right = game.statuses
     for status, inner in ((left, 1), (right, -1)):
-        button = _menu_button(status)
+        button = _pause_button(status)
         label = status.children[-1]
         assert button.opacity == 1 and not button.disabled
         assert button.center_y == label.center_y == pytest.approx(
             Window.height / 2)
         assert (button.center_x - label.center_x) * inner < 0
-    _menu_button(left).dispatch('on_press')
-    assert game.menu_active
+    _pause_button(left).dispatch('on_press')
+    assert game.paused
 
 
 def test_touch_controls_are_capped_on_a_small_screen():
@@ -1656,3 +1671,486 @@ def test_touch_controls_are_capped_on_a_small_screen():
     tall = main.ScreenButtonsLayout(size=(3000, 3000))
     assert tall.stick.width == pytest.approx(main.dp(main.STICK_DP))
     assert tall.fire.width == pytest.approx(main.dp(main.FIRE_DP))
+
+
+class FakeSDL:
+    """Just enough of the SDL2 joystick API for PadWatcher."""
+    def __init__(self):
+        self.devices = []        # instance ids, index = position
+        self.opened = []
+        self.closed = []
+        self.SDL_NumJoysticks = lambda: len(self.devices)
+        self.SDL_JoystickGetDeviceInstanceID = lambda i: self.devices[i]
+        self.SDL_JoystickOpen = self._open
+        self.SDL_JoystickClose = self.closed.append
+
+    def _open(self, index):
+        self.opened.append(self.devices[index])
+        return 1000 + self.devices[index]
+
+
+class Fn:
+    """A function that accepts the ctypes attributes PadWatcher sets."""
+    def __init__(self, fn):
+        self.fn = fn
+
+    def __call__(self, *args):
+        return self.fn(*args)
+
+
+def _fake_sdl():
+    sdl = FakeSDL()
+    for name in ('SDL_NumJoysticks', 'SDL_JoystickGetDeviceInstanceID',
+                 'SDL_JoystickOpen', 'SDL_JoystickClose'):
+        setattr(sdl, name, Fn(getattr(sdl, name)))
+    return sdl
+
+
+def test_pad_watcher_opens_pads_connected_later():
+    sdl = _fake_sdl()
+    watcher = main.PadWatcher(sdl)
+    watcher.poll()
+    assert sdl.opened == []
+    sdl.devices.append(7)            # a Bluetooth pad is switched on
+    watcher.poll()
+    watcher.poll()
+    assert sdl.opened == [7]         # opened once, not on every poll
+
+
+def test_pad_watcher_closes_gone_pads_and_reopens_them():
+    sdl = _fake_sdl()
+    sdl.devices.append(3)
+    watcher = main.PadWatcher(sdl)
+    watcher.poll()
+    sdl.devices.clear()
+    watcher.poll()
+    assert sdl.closed == [1003]
+    sdl.devices.append(4)            # reconnects under a new id
+    watcher.poll()
+    assert sdl.opened == [3, 4]
+
+
+def test_pad_watcher_is_off_outside_android():
+    assert main.watch_gamepads() is None
+
+
+def test_android_gamepad_buttons_do_not_leave_the_game_on_a_stick_click():
+    android = main.JOY_BUTTON_ACTIONS_ANDROID
+    assert android[4] == 'back' and android[6] == 'back'   # View, Start
+    assert 7 not in android and 8 not in android           # stick clicks
+    assert [android[b] for b in (11, 12, 13, 14)] == [
+        'up', 'down', 'left', 'right']
+    # desktop numbering is unchanged
+    assert main.JOY_BUTTON_ACTIONS_DESKTOP[6] == 'back'
+    assert main.JOY_BUTTON_ACTIONS_DESKTOP[7] == 'back'
+
+
+# ---- game over: results, leaderboard, replay --------------------------
+
+def _lose_all(game):
+    for ship in list(game.spaceships):
+        ship.lives = 0
+        game.lose_spaceship(ship)
+
+
+def _armed(screen):
+    screen.armed_at = 0   # skip the input guard
+
+
+def test_game_over_shows_results_with_points_and_time(kv_game):
+    game = kv_game
+    game.game_start()
+    game.spaceships[0].points = 7
+    game.elapsed = 42.5
+    _lose_all(game)
+    assert game.results_active
+    assert not game.menu_active
+    assert [(r.points, int(r.survived)) for r in game.results_screen.results] \
+        == [(7, 42)]
+
+
+def test_leaving_from_pause_skips_results(kv_game):
+    kv_game.game_start()
+    kv_game._on_key_down(None, KEY_ESC)
+    assert kv_game.paused
+    kv_game.pause_screen.go_menu()
+    kv_game.confirm_screen.yes()
+    assert kv_game.menu_active
+    assert not kv_game.results_active
+
+
+def test_survival_time_per_ship(kv_game):
+    game = kv_game
+    game.game_start(2)
+    first, second = game.spaceships
+    game.elapsed = 20
+    first.lives = 0
+    game.lose_spaceship(first)
+    game.elapsed = 55
+    _lose_all(game)
+    got = {r.slot: r.survived for r in game.results_screen.results}
+    assert got == {0: 20, 1: 55}
+
+
+def test_elapsed_counts_only_while_ships_fly(kv_game):
+    game = kv_game
+    game.game_start()
+    game.update(0.5)
+    game.update(0.25)
+    assert game.elapsed == pytest.approx(0.75)
+
+
+def test_leaderboard_orders_caps_and_persists(tmp_path):
+    path = str(tmp_path / 'lb.json')
+    board = main.Leaderboard(path)
+    for points, seconds in [(5, 10), (30, 40), (12, 20), (12, 50)]:
+        assert board.add(points, seconds)
+    assert [(e['points'], e['seconds']) for e in board.entries] == [
+        (30, 40), (12, 50), (12, 20), (5, 10)]
+    for i in range(20):
+        board.add(100 + i, 1)
+    assert len(board.entries) == main.LEADERBOARD_SIZE
+    assert main.Leaderboard(path).entries == board.entries
+
+
+def test_leaderboard_tolerates_corrupt_file(tmp_path):
+    path = tmp_path / 'lb.json'
+    path.write_text('{nope')
+    assert main.Leaderboard(str(path)).entries == []
+    path.write_text('{"entries": [{"points": "x"}, {"points": 3, "seconds": 9}]}')
+    assert main.Leaderboard(str(path)).entries == [
+        {'name': 'Player', 'points': 3, 'seconds': 9}]
+
+
+def test_leaderboard_reports_unwritable_file(tmp_path):
+    blocked = tmp_path / 'file'
+    blocked.write_text('x')
+    board = main.Leaderboard(str(blocked / 'lb.json'))
+    assert board.add(1, 1) is False
+    assert len(board.entries) == 1
+
+
+def test_save_score_once_saves_top_player(kv_game, tmp_path):
+    game = kv_game
+    game.leaderboard = main.Leaderboard(str(tmp_path / 'lb.json'))
+    game.game_start(slots=[('keys', 0), ('keys', 1), ('pad', 0), None])
+    for ship, points in zip(game.spaceships, (3, 9, 4)):
+        ship.points = points
+    game.elapsed = 30
+    _lose_all(game)
+    screen = game.results_screen
+    _armed(screen)
+    screen.save_score()
+    assert game.name_active and not game.results_active
+    assert game.name_screen.ids.title.text == 'Nickname of player 2'
+    game.name_screen.ids.field.text = '  Ann  '
+    game.name_screen.accept()
+    assert game.results_active and screen.saved
+    screen.save_score()    # only once
+    assert not game.name_active
+    assert game.leaderboard.entries == [
+        {'name': 'Ann', 'points': 9, 'seconds': 30}]
+
+
+def test_results_ignore_presses_right_after_game_over(kv_game):
+    game = kv_game
+    game.game_start()
+    _lose_all(game)
+    game.results_screen.play_again()
+    assert game.results_active   # still guarded
+
+
+def test_play_again_keeps_configuration(kv_game):
+    game = kv_game
+    slots = [('keys', 0), None, ('pad', 0), ('touch', 'left')]
+    colors = ['red', 'green', 'blue', 'yellow']
+    game.game_start(slots=slots, colors=colors)
+    _lose_all(game)
+    _armed(game.results_screen)
+    game.results_screen.play_again()
+    assert not game.results_active
+    assert game.slots == slots
+    assert [s.cabin for s in game.spaceships] == ['red', 'blue', 'yellow']
+    assert len(game.spaceships) == 3
+
+
+def test_results_main_menu_and_back(kv_game):
+    game = kv_game
+    game.game_start()
+    _lose_all(game)
+    _armed(game.results_screen)
+    game.results_screen.go_menu()
+    assert game.menu_active and not game.results_active
+    game.game_start()
+    _lose_all(game)
+    game._on_key_down(None, KEY_ESC)
+    assert game.menu_active and not game.results_active
+
+
+def test_leaderboard_screen_from_menu(kv_game):
+    game = kv_game
+    game.leaderboard = main.Leaderboard()
+    game.show_leaderboard()
+    assert game.leaderboard_active
+    game._on_key_down(None, KEY_ESC)
+    assert game.menu_active and not game.leaderboard_active
+
+
+# ---- pause ------------------------------------------------------------
+
+def _asteroid(game, pos=(300, 300), angle=0):
+    asteroid = Asteroid(angle=angle)
+    asteroid.pos = pos
+    game.add_widget(asteroid)
+    game.asteroids.append(asteroid)
+    return asteroid
+
+
+def test_pause_freezes_the_world_and_resume_continues(kv_game):
+    game = kv_game
+    game.game_start()
+    ship = game.spaceships[0]
+    asteroid = _asteroid(game)
+    ship.shot()
+    shot = game.shots[0]
+    game.pause()
+
+    assert game.paused and game.pause_screen in game.children
+    assert [b.text for b in game.pause_screen.buttons] == [
+        'Continue', 'Main menu']
+    seen = (tuple(asteroid.pos), tuple(shot.pos), game.elapsed)
+    from kivy.clock import Clock
+    for _ in range(5):
+        Clock.tick()
+    assert (tuple(asteroid.pos), tuple(shot.pos), game.elapsed) == seen
+
+    game.resume()
+    assert not game.paused and not hasattr(game, 'pause_screen')
+    game.update(1 / 60)
+    assert tuple(asteroid.pos) != seen[0]
+    assert game.elapsed > seen[2]
+
+
+def test_pause_stops_new_asteroids_and_ignores_ship_input(kv_game):
+    game = kv_game
+    game.game_start()
+    game.pause()
+    ship = game.spaceships[0]
+    _press(game, 273)                  # up: moves the pause selection
+    assert not ship.thrust
+    assert not game.controls[0].held
+
+
+def test_pause_keyboard_navigation_and_back_continues(kv_game):
+    game = kv_game
+    game.game_start()
+    game.pause()
+    _press(game, 274)                  # down: Main menu
+    assert game.pause_screen.selected == 1
+    _press(game, KEY_ESC)              # Back: Continue
+    assert not game.paused and game.spaceships
+
+    game.pause()
+    _press(game, 274)
+    _press(game, KEY_ENTER)            # Main menu: asks first
+    assert game.paused and not game.menu_active
+    _press(game, 273)                  # up: Yes
+    _press(game, KEY_ENTER)
+    assert game.menu_active and not game.paused
+    assert game.spaceships == []
+    assert not hasattr(game, 'pause_screen')
+
+
+def test_resume_does_not_leave_a_ship_thrusting(kv_game):
+    game = kv_game
+    game.game_start()
+    game.controls[0].press('up')
+    assert game.spaceships[0].thrust
+    game.pause()
+    assert not game.spaceships[0].thrust
+    game.resume()
+    assert not game.spaceships[0].thrust
+
+
+def test_touch_players_get_a_pause_button(kv_game):
+    game = kv_game
+    game.game_start(slots=[('touch', 'left'), ('touch', 'right')])
+    game.update(0)
+    assert all(s.show_menu for s in game.statuses)
+    buttons = [w for s in game.statuses for w in s.children
+               if type(w).__name__ == 'PauseButton']
+    assert len(buttons) == 2 and all(b.text == 'Pause' for b in buttons)
+    game.pause()
+    assert not any(s.show_menu for s in game.statuses)
+    game.resume()
+    assert all(s.show_menu for s in game.statuses)
+
+
+def _name_entry(game, tmp_path):
+    game.leaderboard = main.Leaderboard(str(tmp_path / 'lb.json'))
+    game.game_start()
+    game.spaceships[0].points = 5
+    _lose_all(game)
+    _armed(game.results_screen)
+    game.results_screen.save_score()
+    assert game.name_active
+
+
+def test_nickname_prefilled_remembered_and_limited(kv_game, tmp_path):
+    game = kv_game
+    _name_entry(game, tmp_path)
+    assert game.name_screen.ids.field.text == 'Player'
+    assert game.name_screen.ids.title.text == 'Your nickname'
+    game.name_screen.ids.field.text = 'Anna'
+    game.name_screen.accept()
+    again = main.Leaderboard(str(tmp_path / 'lb.json'))
+    assert again.last_name == 'Anna'
+    assert main.clean_name('   ') == 'Player'
+    assert main.clean_name('x' * 30) == 'x' * 12
+    game.results_screen.saved = False
+    game.results_screen.save_score()
+    assert game.name_screen.ids.field.text == 'Anna'
+
+
+def test_cancel_name_entry_keeps_score_unsaved(kv_game, tmp_path):
+    game = kv_game
+    _name_entry(game, tmp_path)
+    game._on_key_down(None, KEY_ESC)
+    assert game.results_active and not game.name_active
+    assert not game.results_screen.saved
+    assert game.leaderboard.entries == []
+
+
+def test_game_keys_do_not_act_while_typing_nickname(kv_game, tmp_path):
+    game = kv_game
+    _name_entry(game, tmp_path)
+    for key in (273, 274, 32, 13):    # up, down, space, enter
+        game._on_key_down(None, key)
+        game._on_key_up(None, key)
+    assert game.name_active
+    assert game.leaderboard.entries == []
+
+
+def test_gamepad_saves_prefilled_nickname(kv_game, tmp_path):
+    game = kv_game
+    _name_entry(game, tmp_path)
+    game._on_joy_button_down(None, 0, 0)     # A: Save is selected first
+    game._on_joy_button_up(None, 0, 0)
+    assert game.results_active
+    assert game.leaderboard.entries == [
+        {'name': 'Player', 'points': 5, 'seconds': 0}]
+
+
+def test_leaderboard_reads_files_without_names(tmp_path):
+    path = tmp_path / 'lb.json'
+    path.write_text('{"entries": [{"points": 3, "seconds": 9}]}')
+    assert main.Leaderboard(str(path)).entries == [
+        {'name': 'Player', 'points': 3, 'seconds': 9}]
+
+
+def test_pause_stops_the_scrolling_background(kv):
+    from kivy.clock import Clock
+    game = SpacePilgrimGame()    # built after the kv: it has the background
+    try:
+        game.game_stop()
+        game.game_start()
+        background = game.background_widget()
+        assert background is not None
+        Clock.tick()
+        game.pause()
+        at = background.uv_pos_x_px
+        for _ in range(5):
+            Clock.tick()
+        assert background.uv_pos_x_px == at
+        game.resume()
+        assert background.animation is not None
+    finally:
+        game.frame_schedule.cancel()
+        game.asteroid_schedule.cancel()
+
+
+def _ask_to_leave(game):
+    game.game_start()
+    game.pause()
+    game.pause_screen.go_menu()
+
+
+def test_main_menu_asks_before_leaving(kv_game):
+    game = kv_game
+    _ask_to_leave(game)
+    assert game.paused and game.spaceships and not game.menu_active
+    assert game.confirm_screen in game.children
+    assert game.pause_screen not in game.children
+    assert [b.text for b in game.confirm_screen.buttons] == ['Yes', 'No']
+
+
+def test_no_returns_to_pause_screen_with_game_kept(kv_game):
+    game = kv_game
+    _ask_to_leave(game)
+    ships = list(game.spaceships)
+    game.confirm_screen.no()
+    assert not hasattr(game, 'confirm_screen')
+    assert game.paused and game.pause_screen in game.children
+    assert game.spaceships == ships and not game.menu_active
+
+
+def test_escape_closes_only_the_popup(kv_game):
+    game = kv_game
+    _ask_to_leave(game)
+    _press(game, KEY_ESC)
+    assert game.paused and game.spaceships and not game.menu_active
+    assert not hasattr(game, 'confirm_screen')
+    assert game.pause_screen in game.children
+
+
+def test_fire_on_default_keeps_the_game(kv_game):
+    game = kv_game
+    _ask_to_leave(game)
+    _press(game, KEY_ENTER)
+    assert game.paused and game.spaceships and not game.menu_active
+    assert game.pause_screen in game.children
+
+
+def test_yes_leaves_without_results(kv_game):
+    game = kv_game
+    _ask_to_leave(game)
+    game.confirm_screen.yes()
+    assert game.menu_active and not game.paused
+    assert not game.results_active and not hasattr(game, 'confirm_screen')
+
+
+def _press_exit(game):
+    exit_button = [b for b in game.menu.buttons if b.text == 'Exit'][0]
+    exit_button.dispatch('on_press')
+
+
+def _fake_app(monkeypatch):
+    stopped = []
+    app = type('FakeApp', (), {'stop': lambda self: stopped.append(1)})()
+    monkeypatch.setattr(main.App, 'get_running_app',
+                        staticmethod(lambda: app))
+    return stopped
+
+
+def test_exit_asks_before_quitting(kv_game, monkeypatch):
+    game = kv_game
+    stopped = _fake_app(monkeypatch)
+    _press_exit(game)
+    assert not stopped and not game.menu_active
+    assert game.confirm_screen.kind == 'exit'
+    assert [b.text for b in game.confirm_screen.buttons] == ['Yes', 'No']
+    _press(game, KEY_ENTER)            # default is No: back to the menu
+    assert not stopped and game.menu_active
+    assert not hasattr(game, 'confirm_screen')
+
+
+def test_exit_escape_closes_popup_and_yes_quits(kv_game, monkeypatch):
+    game = kv_game
+    stopped = _fake_app(monkeypatch)
+    _press_exit(game)
+    _press(game, KEY_ESC)
+    assert not stopped and game.menu_active and not game.spaceships
+    _press_exit(game)
+    _press(game, 273)                  # up: Yes
+    _press(game, KEY_ENTER)
+    assert stopped

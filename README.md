@@ -28,16 +28,8 @@ You have two choices:
 
 #### Android TV
 
-The game already runs as a landscape Kivy app and handles arrow keys + space, which a TV remote D-pad and gamepad send as key events.
+The game runs on Android TV (TV launcher entry and banner, optional touchscreen / gamepad, menus and game playable with the D-pad or a gamepad). Still to do:
 
-- [x] Manifest: `android.intent.category.LEANBACK_LAUNCHER` intent filter (`android/intent_filters.xml`) so the app appears in the TV launcher.
-- [x] Manifest: `android.hardware.touchscreen`, `android.software.leanback` and `android.hardware.gamepad` declared `required="false"` (`android/extra_manifest.xml`).
-- [x] 320x180 px TV banner (`android/res/drawable/banner.png`) referenced as `android:banner` (`android/application_args.xml`).
-- [x] Controls: on-screen touch controls shown at start only on Android phones/tablets (not TV), on any device once touched; hidden once a keyboard or gamepad is used. Can be forced on/off in Settings.
-- [x] Controls: D-pad centre / Enter / gamepad A / Space shoot (D-pad centre keycode is unverified on a real TV).
-- [x] Controls: main menu is navigable with D-pad / stick and Enter / A.
-- [x] Controls: Back / Escape returns to the main menu; from the menu it exits (desktop) or pauses the app (Android).
-- [x] Gamepad left stick, D-pad and buttons via SDL joystick events (button ids are Xbox-style defaults, untested on hardware).
 - [ ] Check HUD and object sizes on 1080p and 4K TV emulators.
 - [ ] Test on the Android Studio "Android TV (1080p)" emulator (done: launches from the TV launcher, menu/settings navigable with the remote, Back returns to the menu) and a real device (Chromecast with Google TV, Nvidia Shield).
 - [ ] Play Console: opt in to the Android TV form factor, upload the 1920x1080 TV screenshots from `store/play/tv/` and the 1280x720 TV banner `store/play/tv-banner.png` (see [Google Play listing images](#google-play-listing-images)); the app must be fully playable with D-pad / gamepad only.
@@ -54,7 +46,7 @@ To verify a build (manifest verified with `aapt2 dump badging`; emulator/device 
 | Turn | Left / Right or A / D | Left stick or D-pad | Stick left / right |
 | Thrust | Up or W | Stick up, D-pad up, B / Y | Stick up |
 | Fire | Space or Enter | A / X | FIRE button |
-| Menu | Escape / Back | Back / Start | - |
+| Pause | Escape / Back | Back / Start | Pause button |
 
 Android TV remote D-pad arrives as arrow keys, centre button fires.
 
@@ -73,13 +65,21 @@ On the join screen every player takes a slot with the device they will play with
 
 Every device, a side strip included, takes the first free slot; a strip is greyed out while a touch player sits on its side. Each slot shows the device that joined it and lights up when that device is used, so everyone sees which keys or pad belong to which ship, and players can set up at the same time. At most two players share the keyboard (two sets) and at most two play by touch; further players use gamepads (up to four players). The game starts when at least two players have joined and all of them are *Ready*. Escape, or Back / Start on a pad that has not joined, returns to the menu. Players cannot pick the same cabin colour; the choice of each slot is saved in `ship_colors.json`. Single player keeps a one-ship selection screen that any keyboard set or gamepad drives.
 
-In the game each device drives only the ship it joined with; devices that did not join are ignored except Back / Escape, which ends the game. Touch players sit at the left and right sides of the device, facing each other, on the side whose strip they tapped: each has the stick under the left hand and FIRE under the right hand from their seat, one control in the bottom corner and the other at the top of their side. Their stick is turned toward them: push it away from you (toward the middle of the screen) to thrust, and to your own left / right to turn. Their controls stay shown for the whole game, whatever the touch setting; keyboard and gamepad players get none. A touch player's lives and points are at the middle of their side, just inside their own touch controls (they move with the controls' size setting and never cover them), turned toward them; keyboard and gamepad players sit in front of the screen and their lives and points run along the top in player order. Each block is in the colour of the player's cabin.
+In the game each device drives only the ship it joined with; devices that did not join are ignored except Back / Escape, which pauses the game. Touch players sit at the left and right sides of the device, facing each other, on the side whose strip they tapped: each has the stick under the left hand and FIRE under the right hand from their seat, one control in the bottom corner and the other at the top of their side. Their stick is turned toward them: push it away from you (toward the middle of the screen) to thrust, and to your own left / right to turn. Their controls stay shown for the whole game, whatever the touch setting; keyboard and gamepad players get none. A touch player's lives and points are at the middle of their side, just inside their own touch controls (they move with the controls' size setting and never cover them), turned toward them; keyboard and gamepad players sit in front of the screen and their lives and points run along the top in player order. Each block is in the colour of the player's cabin.
 
 Both keyboard sets work at the same time (very cheap keyboards may not report six held keys at once; the keys are rebindable). In a single-player game any keyboard set and any gamepad drives the ship.
 
 Touch controls are a joystick overlay (draggable stick bottom-left: up thrusts, left / right turn, in-between positions combine them; square red FIRE button bottom-right). They appear on any device as soon as the screen is touched and hide again when a keyboard key or gamepad input is used, so keyboard, gamepad and touch can be mixed freely. **Settings > Touch controls** switches between Auto (default), On (always shown) and Off, and sets the size of the controls with a slider (50-400%, left / right keys also work; applied to the next game and limited to what fits on screen); the choices are saved in `touch_ui.json` in the app's user data directory.
 
 Keyboard keys for thrust, turn left, turn right and fire can be changed in **Settings > Keyboard layout** in the main menu: pick an action, then press the new key (Escape cancels). The *Keys of: Set* button switches between keyboard set 1 (defaults W / A / D / Space) and set 2 (I / J / L / K); **Reset to defaults** restores both. Arrow keys, Enter and Escape are fixed (arrows and Enter always count as set 1) so the menus always stay reachable, and a key already used by any action of either set is refused. Bindings of both sets are saved in `keybindings.json` (physical keys, so they work on any keyboard layout; files from versions with one set are read as set 1) in the app's user data directory.
+
+### Pause
+
+In a game, Escape / Back (or a gamepad's Back / Start) pauses; touch players also have a **Pause** button under their lives and points. It freezes the whole game (ships, asteroids, shots, explosions, the scrolling background, the clock) behind a dimmed pause screen with **Continue** and **Main menu**; the pause screen also works with the keyboard and gamepads, and Back / Escape on it continues. **Main menu** leaves the game without the results screen.
+
+### Game over and leaderboard
+
+When the last ship is lost, a results screen shows each player's time survived (seconds) and points; the points are the rating, and in multiplayer the longest survivor is marked. **Save to leaderboard** asks for a nickname (up to 12 characters, prefilled with the last one used; on a gamepad or remote just accept it with Save) and stores the game's top player (the only player, or the one with most points) with their nickname, points and time in `leaderboard.json` in the app's user data directory; it never leaves the device. **Play again** restarts with the same players, devices and cabin colours, and **Main menu** (or Back / Escape) returns to the menu. The **Leaderboard** entry of the main menu lists the best ten, ordered by points (the time only breaks ties). Leaving a game through the pause screen skips the results screen.
 
 ### Google Play listing images
 
@@ -163,6 +163,20 @@ buildozer android release
 - two touch players on a small screen: joystick and FIRE sit in the corners of each side instead of being pushed toward the middle
 
 - the Menu button sits under the lives and points text: below it for one player, at the middle of the side (between the two controls) for each touch player, so it is not pressed by mistake
+
+### 0.3.3
+
+- Android / Android TV: a gamepad that connects after the app has started (Bluetooth) is now opened, so its stick and D-pad steer and navigate the menus, not only its buttons
+
+- Android: gamepad button numbers follow Android's layout, so clicking the left stick while steering no longer leaves the game (Back / View and Start do); the pad is picked up within a quarter of a second of connecting
+
+### 0.3.4
+
+- pause: Escape / Back / Start (or a Pause button for touch players) freezes the game behind a pause screen with Continue and Main menu, instead of ending it
+
+- game over results screen with each player's time survived and points, Play again, and a local leaderboard of the best ten (nickname, points, time) in the main menu
+
+- Android: black presplash screen
 
 ## Copyright and License
 

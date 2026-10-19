@@ -1,9 +1,10 @@
-__version__ = "0.3.2"
+__version__ = "0.3.4"
 
 import colorsys
 import json
 import math
 import os
+from collections import namedtuple
 from functools import partial
 from random import randint, choice
 
@@ -28,6 +29,7 @@ from kivy.graphics import (
 from kivy.metrics import dp, cm
 from kivy.vector import Vector
 from kivy.clock import Clock
+from kivy.logger import Logger
 
 from kivy.core.image import Image
 from kivy.graphics.texture import Texture
@@ -288,12 +290,24 @@ class TouchSettings:
 
 # Default gamepad layout (SDL joystick button ids, Xbox-style pad):
 # A / X fire, B / Y thrust, Back / Start return to the menu.
-# Left stick and D-pad steer.
-JOY_BUTTON_ACTIONS = {
+# Left stick and D-pad steer. The ids differ by platform: on desktop the
+# pad's buttons come in the order of the driver (6 Back, 7 Start); on
+# Android SDL numbers them like a game controller: A B X Y, 4 Back (View),
+# 5 Guide, 6 Start, 7 / 8 stick clicks (must not leave the game), 9 / 10
+# shoulders, 11-14 D-pad.
+JOY_BUTTON_ACTIONS_DESKTOP = {
     0: 'fire', 2: 'fire',
     1: 'up', 3: 'up',
     6: 'back', 7: 'back',
 }
+JOY_BUTTON_ACTIONS_ANDROID = {
+    0: 'fire', 2: 'fire',
+    1: 'up', 3: 'up',
+    4: 'back', 6: 'back',
+    11: 'up', 12: 'down', 13: 'left', 14: 'right',
+}
+JOY_BUTTON_ACTIONS = (JOY_BUTTON_ACTIONS_ANDROID if platform == 'android'
+                      else JOY_BUTTON_ACTIONS_DESKTOP)
 JOY_AXIS_DEADZONE = 0.5
 
 
@@ -411,6 +425,85 @@ class ShipColors:
             pass  # keep the in-memory choice for this session
 
 
+PlayerResult = namedtuple('PlayerResult', 'slot color points survived')
+LEADERBOARD_SIZE = 10
+NAME_LENGTH = 12
+DEFAULT_NAME = 'Player'
+
+
+def clean_name(text):
+    """A nickname as stored: trimmed, at most NAME_LENGTH characters."""
+    return str(text).strip()[:NAME_LENGTH].strip() or DEFAULT_NAME
+
+
+def top_result(results):
+    """The best player of a game: most points, then longest survival."""
+    return max(results, key=lambda r: (r.points, r.survived))
+
+
+class Leaderboard:
+    """The best games played on this device, as JSON: one entry per saved
+    game with the player's nickname, points (the rating) and the seconds
+    survived (information, only breaks ties); also the last nickname used. Best first, at most LEADERBOARD_SIZE entries."""
+
+    VERSION = 1
+
+    def __init__(self, path=None):
+        self.path = path
+        self.entries = []
+        self.last_name = ''
+        self.load()
+
+    @staticmethod
+    def _rank(entry):
+        return (-entry['points'], -entry['seconds'])
+
+    def add(self, points, seconds, name=DEFAULT_NAME):
+        """Keep the game in the top entries and write the file. False when
+        the file could not be written (the entry stays for this session)."""
+        name = clean_name(name)
+        self.last_name = name
+        self.entries.append({'name': name, 'points': int(points),
+                             'seconds': int(seconds)})
+        self.entries.sort(key=self._rank)
+        del self.entries[LEADERBOARD_SIZE:]
+        return self.save()
+
+    def load(self):
+        if not self.path:
+            return
+        try:
+            with open(self.path) as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return
+        entries = data.get('entries') if isinstance(data, dict) else None
+        if not isinstance(entries, list):
+            return
+        valid = [{'name': clean_name(e.get('name', DEFAULT_NAME)),
+                  'points': e['points'], 'seconds': e['seconds']}
+                 for e in entries
+                 if isinstance(e, dict)
+                 and all(type(e.get(k)) is int and e[k] >= 0
+                         for k in ('points', 'seconds'))]
+        valid.sort(key=self._rank)
+        self.entries = valid[:LEADERBOARD_SIZE]
+        if isinstance(data.get('last_name'), str):
+            self.last_name = clean_name(data['last_name'])
+
+    def save(self):
+        if not self.path:
+            return True
+        try:
+            os.makedirs(os.path.dirname(self.path) or '.', exist_ok=True)
+            with open(self.path, 'w') as f:
+                json.dump({'version': self.VERSION, 'last_name': self.last_name,
+                           'entries': self.entries}, f)
+        except OSError:
+            return False
+        return True
+
+
 def is_android_tv():
     if platform != 'android':
         return False
@@ -452,6 +545,56 @@ def hide_system_bars():
         pass
 
 
+class PadWatcher:
+    """Opens gamepads that connect after the app has started.
+
+    Kivy opens the joysticks SDL knows at start-up and never the ones that
+    appear later (a Bluetooth pad switched on in the menu, or a reconnect),
+    and SDL sends no stick or D-pad events for a joystick that is not open:
+    only the buttons arrive, as plain keys. This looks for new ones four
+    times a second and opens them, so that sticks, D-pad and buttons reach the game
+    as joystick events. `sdl` is the loaded SDL2 library."""
+
+    def __init__(self, sdl):
+        import ctypes
+        self.sdl = sdl
+        sdl.SDL_NumJoysticks.restype = ctypes.c_int
+        sdl.SDL_JoystickOpen.argtypes = [ctypes.c_int]
+        sdl.SDL_JoystickOpen.restype = ctypes.c_void_p
+        sdl.SDL_JoystickClose.argtypes = [ctypes.c_void_p]
+        sdl.SDL_JoystickGetDeviceInstanceID.argtypes = [ctypes.c_int]
+        sdl.SDL_JoystickGetDeviceInstanceID.restype = ctypes.c_int32
+        self.open = {}      # SDL instance id -> joystick handle
+
+    def poll(self, dt=0):
+        sdl = self.sdl
+        present = {}
+        for index in range(sdl.SDL_NumJoysticks()):
+            present[sdl.SDL_JoystickGetDeviceInstanceID(index)] = index
+        for instance, index in present.items():
+            if instance not in self.open:
+                handle = sdl.SDL_JoystickOpen(index)
+                if handle:
+                    self.open[instance] = handle
+                    Logger.info('Pads: opened joystick %s', instance)
+        for instance in [i for i in self.open if i not in present]:
+            sdl.SDL_JoystickClose(self.open.pop(instance))
+
+
+def watch_gamepads():
+    """Android: keep opening newly connected gamepads (see PadWatcher).
+    Returns the Clock event, or None where it is not needed or possible."""
+    if platform != 'android':
+        return None
+    try:
+        import ctypes
+        watcher = PadWatcher(ctypes.CDLL('libSDL2.so'))
+        watcher.poll()
+        return Clock.schedule_interval(watcher.poll, 0.25)
+    except Exception:
+        return None
+
+
 def has_touchscreen():
     """Whether the device has a touchscreen. Android TV usually has none;
     on desktops a mouse click arrives as a touch, so count it as one."""
@@ -484,6 +627,15 @@ class Explosion(Widget):
         )
         self.animation.start(self)
         self.animation.bind(on_complete=self.remove_from_parent)
+
+    def pause(self):
+        self.animation.cancel(self)
+
+    def resume(self):
+        left = (22 - self.frame) / 22 * 0.6
+        self.animation = Animation(frame=22, t='linear', duration=left)
+        self.animation.bind(on_complete=self.remove_from_parent)
+        self.animation.start(self)
 
     def change_texture(self, called_by, value):
         self.texture = self.textures[int(value)]
@@ -592,19 +744,18 @@ class Spaceship(Widget):
         shot.speed += self.speed
 
         self.parent.shots.append(shot)
-        Clock.schedule_interval(
-            partial(self.parent.remove_shot, shot), shot.lifetime)
+        self.parent.expire_shot(shot)
         self.parent.add_widget(shot)
 
 
-class MenuButton(Button):
-    """Touch players have no Back key: this returns to the main menu. It is
-    square, so that it can be turned with its player's status block."""
+class PauseButton(Button):
+    """Touch players have no Back key: this pauses the game. It is square,
+    so that it can be turned with its player's status block."""
 
 
 class SpaceshipStatus(Widget):
     spaceship = ObjectProperty()
-    show_menu = BooleanProperty(False)  # touch player: show the Menu button
+    show_menu = BooleanProperty(False)  # touch player: show the Pause button
     # '' one player (top right); multiplayer: 'left' / 'right' for a touch
     # player's side, 'top' for keyboard and gamepad players
     side = StringProperty('')
@@ -669,6 +820,123 @@ class ButtonColumn(BoxLayout):
 
 class Menu(ButtonColumn):
     pass
+
+
+class ResultsScreen(ButtonColumn):
+    """Shown when the last ship is lost: what each player got, and what to
+    do next. The points are the rating; the time is for information."""
+    # ignore presses for a moment: players are still pressing FIRE
+    GUARD = 1.0
+
+    def __init__(self, results, **kwargs):
+        super().__init__(**kwargs)
+        self.results = results
+        self.saved = False
+        self.armed_at = Clock.get_time() + self.GUARD
+        longest = max(r.survived for r in results)
+        for result in results:
+            self.ids.rows.add_widget(self._row(
+                result, len(results) > 1,
+                len(results) > 1 and result.survived == longest))
+
+    @staticmethod
+    def _row(result, multi, longest):
+        name = 'Player {}  '.format(result.slot + 1) if multi else ''
+        return Label(
+            text='{}Time {:>3} s   Points {:>3}{}'.format(
+                name, int(result.survived), result.points,
+                '   longest' if longest else ''),
+            color=(*cabin_rgb(result.color), 1),
+            font_size='17dp', font_name='data/fonts/RobotoMono-Regular.ttf')
+
+    def activate(self):
+        if Clock.get_time() >= self.armed_at:
+            super().activate()
+
+    def save_score(self):
+        """Ask for a nickname; the score is stored by `store_score`."""
+        if self.saved or Clock.get_time() < self.armed_at:
+            return
+        self.parent.show_name_entry()
+
+    def store_score(self, name):
+        best = top_result(self.results)
+        ok = self.parent.leaderboard.add(best.points, best.survived, name)
+        self.saved = True
+        self.ids.btn_save.text = 'Saved'
+        self.ids.btn_save.disabled = True
+        self.ids.message.text = ('' if ok else
+                                 'Could not write the file; kept until exit')
+        self.selected = 0
+        self.highlight()
+
+    def play_again(self):
+        if Clock.get_time() >= self.armed_at:
+            self.parent.play_again()
+
+    def go_menu(self):
+        self.parent.show_menu()
+
+
+class PauseScreen(ButtonColumn):
+    """Shown over the frozen world: carry on, or leave for the main menu."""
+
+    def resume(self):
+        self.parent.resume()
+
+    def go_menu(self):
+        self.parent.confirm_leave()
+
+
+class ConfirmScreen(ButtonColumn):
+    """Asks before the running game is thrown away. Starts on "No" so a
+    stray fire press keeps the game."""
+
+    def __init__(self, kind, **kwargs):
+        # kind: 'leave' (game to main menu) or 'exit' (quit the app)
+        self.kind = kind
+        kwargs.setdefault('selected', 1)
+        super().__init__(**kwargs)
+
+    def yes(self):
+        if self.kind == 'exit':
+            App.get_running_app().stop()
+        else:
+            self.parent.game_stop()
+
+    def no(self):
+        self.parent.leave_cancel()
+
+
+class NameScreen(ButtonColumn):
+    """Nickname for a score to save. Pads and remotes cannot type: they
+    accept the prefilled nickname with Save."""
+
+    def __init__(self, name, top, **kwargs):
+        super().__init__(**kwargs)
+        self.ids.title.text = ('Your nickname' if top is None else
+                               'Nickname of player {}'.format(top + 1))
+        field = self.ids.field
+        field.text = name
+        field.focus = True
+
+    def accept(self):
+        self.parent.name_done(self.ids.field.text)
+
+    def cancel(self):
+        self.parent.name_done(None)
+
+
+class LeaderboardScreen(ButtonColumn):
+    def __init__(self, entries, **kwargs):
+        super().__init__(**kwargs)
+        if not entries:
+            self.ids.rows.add_widget(Label(text='No scores saved yet'))
+        for i, entry in enumerate(entries, 1):
+            self.ids.rows.add_widget(Label(
+                text='{:>2}. {:<12} {:>3} pts {:>4} s'.format(
+                    i, entry['name'], entry['points'], entry['seconds']),
+                font_size='16dp', font_name='data/fonts/RobotoMono-Regular.ttf'))
 
 
 class SettingsScreen(ButtonColumn):
@@ -1573,13 +1841,26 @@ class AnimatedBackground(Widget):
         )
         self.property('background').dispatch(self)
 
+    DURATION = 15   # seconds for one trip over the picture
+
     def animate(self, *args):
         self.uv_pos_x_px = 0
+        self._scroll(self.DURATION)
+
+    def _scroll(self, duration):
         self.animation = Animation(
-            uv_pos_x_px=self.background.size[0], t='linear', duration=15
-        )
+            uv_pos_x_px=self.background.size[0], t='linear',
+            duration=duration)
         self.animation.bind(on_complete=self.animate)
         self.animation.start(self)
+
+    def pause(self):
+        self.animation.cancel(self)
+
+    def resume(self):
+        """Go on from where the picture stopped."""
+        width = self.background.size[0]
+        self._scroll(self.DURATION * (1 - self.uv_pos_x_px / width))
 
 
 class SpacePilgrimGame(Widget):
@@ -1613,9 +1894,17 @@ class SpacePilgrimGame(Widget):
         self.ship_colors = ShipColors(
             os.path.join(app.user_data_dir, 'ship_colors.json')
             if app else None)
+        self.leaderboard = Leaderboard(
+            os.path.join(app.user_data_dir, 'leaderboard.json')
+            if app else None)
+        self.paused = False
+        self.elapsed = 0.0   # seconds of the running game
+        self.results = []    # PlayerResult of the ships lost so far
+        self.last_config = None   # (players, colors, slots) of the game
         self.num_players = 1
         self.controls = []   # one ControlsManager per slot, None if empty/out
         self.slots = None    # multiplayer: slot -> device; None: one player
+        self.pad_watch = watch_gamepads()
         Window.bind(
             on_key_down=self._on_key_down,
             on_key_up=self._on_key_up,
@@ -1642,7 +1931,9 @@ class SpacePilgrimGame(Widget):
         self.asteroid_schedule.cancel()
         self.asteroid_schedule = Clock.schedule_interval(self.generate_asteroid, 2)
 
-        self.remove_widget(self.menu)
+        for name in ('menu', 'results_screen', 'leaderboard_screen'):
+            if hasattr(self, name):
+                self.remove_widget(getattr(self, name))
         if self.select_active:
             self.remove_widget(self.select)
             del self.select
@@ -1650,6 +1941,10 @@ class SpacePilgrimGame(Widget):
             slots = [('keys', 0), ('keys', 1), ('pad', 0), ('pad', 1)][:players]
         self.slots = list(slots) if slots is not None else None
         colors = list(colors or self.ship_colors.colors)
+        self.last_config = (
+            players, list(colors), list(slots) if slots is not None else None)
+        self.elapsed = 0.0
+        self.results = []
         entries = ([(0, None)] if slots is None
                    else [(i, d) for i, d in enumerate(slots) if d])
         self.num_players = len(entries)
@@ -1707,13 +2002,15 @@ class SpacePilgrimGame(Widget):
     def _show_touch_controls(self):
         """Touch players always see their controls, keyboard and gamepad
         players never; in single player the touch setting decides."""
+        if self.paused:
+            return
         for controls in self.controls:
             if controls is not None:
                 visible = (self.touch_ui if controls.touch == 'auto'
                            else controls.touch == 'on')
                 controls.show_touch_buttons(visible)
                 # touch play has no Back key: the player's status block
-                # offers the way back to the menu
+                # offers the pause screen, which leads back to the menu
                 for status in self.statuses:
                     if status.spaceship is controls.spaceship:
                         status.show_menu = visible
@@ -1730,7 +2027,9 @@ class SpacePilgrimGame(Widget):
         id of the physical key/button/axis) of `device` (('keys', set) or
         ('pad', stick); None for keys of no set) to the menu or the game."""
         in_game = not (self.settings_active or self.menu_active
-                       or self.select_active)
+                       or self.select_active or self.results_active
+                       or self.leaderboard_active or self.name_active
+                       or self.paused or hasattr(self, 'confirm_screen'))
         controls = None
         if in_game and action != 'back':
             controls = self._controls_of(device)
@@ -1747,7 +2046,23 @@ class SpacePilgrimGame(Widget):
                 return
             self._inputs_down.discard(source)
 
-        if self.settings_active:
+        confirm = getattr(self, 'confirm_screen', None)
+        if confirm or self.paused:
+            if not pressed:
+                return
+            screen = confirm or self.pause_screen
+            if action == 'up':
+                screen.move(-1)
+            elif action == 'down':
+                screen.move(1)
+            elif action == 'fire':
+                screen.activate()
+            elif action == 'back':
+                if confirm:
+                    self.leave_cancel()
+                else:
+                    self.resume()
+        elif self.settings_active:
             if not pressed or self.settings.waiting:
                 return
             if action == 'up':
@@ -1765,6 +2080,30 @@ class SpacePilgrimGame(Widget):
         elif self.select_active:
             if pressed:
                 self.select.handle(device, action)
+        elif self.name_active:
+            if not pressed:
+                return
+            if action == 'up':
+                self.name_screen.move(-1)
+            elif action == 'down':
+                self.name_screen.move(1)
+            elif action == 'fire':
+                self.name_screen.activate()
+            elif action == 'back':
+                self.name_screen.cancel()
+        elif self.results_active or self.leaderboard_active:
+            if not pressed:
+                return
+            screen = (self.results_screen if self.results_active
+                      else self.leaderboard_screen)
+            if action == 'up':
+                screen.move(-1)
+            elif action == 'down':
+                screen.move(1)
+            elif action == 'fire':
+                screen.activate()
+            elif action == 'back':
+                self.show_menu()
         elif self.menu_active:
             if not pressed:
                 return
@@ -1775,11 +2114,11 @@ class SpacePilgrimGame(Widget):
             elif action == 'fire':
                 self.menu.activate()
             elif action == 'back' and platform != 'android':
-                App.get_running_app().stop()
+                self.confirm_exit()
             # On Android the Back key is left to Kivy: it pauses the app.
         elif action == 'back':
             if pressed:
-                self.game_stop()
+                self.pause()
         elif controls is not None:
             if pressed:
                 controls.press(action)
@@ -1804,6 +2143,20 @@ class SpacePilgrimGame(Widget):
     @property
     def select_active(self):
         return hasattr(self, 'select') and self.select in self.children
+
+    @property
+    def name_active(self):
+        return hasattr(self, 'name_screen') and self.name_screen in self.children
+
+    @property
+    def results_active(self):
+        return (hasattr(self, 'results_screen')
+                and self.results_screen in self.children)
+
+    @property
+    def leaderboard_active(self):
+        return (hasattr(self, 'leaderboard_screen')
+                and self.leaderboard_screen in self.children)
 
     @property
     def settings_active(self):
@@ -1863,6 +2216,13 @@ class SpacePilgrimGame(Widget):
             # ignore auto-repeat of the key until it is released
             self._inputs_down.add(('key', key))
             self.settings.handle_key(key, scancode)
+            return
+        if self.name_active:
+            # typing a nickname: only Escape (cancel) and Enter (in the
+            # field) mean something, the game keys must not move the menu
+            self._back_from_menu = False
+            if key == 27:
+                self.name_screen.cancel()
             return
         # Kivy dispatches on_keyboard right after this handler, by which time
         # Back may already have closed the game or settings; remember where
@@ -1927,9 +2287,150 @@ class SpacePilgrimGame(Widget):
             self._joy_input(stick, ('button', stick, button), action, False)
 
     def game_stop(self):
+        """Leave the game (or whatever is shown) for the main menu."""
+        self.end_game()
+        self.show_menu()
+
+    def show_menu(self):
+        for name in ('results_screen', 'leaderboard_screen', 'name_screen'):
+            if hasattr(self, name):
+                self.remove_widget(getattr(self, name))
+                delattr(self, name)
+        if hasattr(self, 'menu'):
+            self.remove_widget(self.menu)
         self.menu = Menu()
         self.add_widget(self.menu)
 
+    def show_name_entry(self):
+        results = self.results_screen.results
+        self.remove_widget(self.results_screen)
+        top = top_result(results).slot if len(results) > 1 else None
+        self.name_screen = NameScreen(
+            self.leaderboard.last_name or DEFAULT_NAME, top)
+        self.add_widget(self.name_screen)
+
+    def name_done(self, name):
+        """Nickname entered (`name`) or cancelled (None): back to results."""
+        self.remove_widget(self.name_screen)
+        del self.name_screen
+        self.add_widget(self.results_screen)
+        if name is not None:
+            self.results_screen.store_score(name)
+        self.results_screen.selected = 0
+        self.results_screen.highlight()
+
+    def show_leaderboard(self):
+        self.remove_widget(self.menu)
+        self.leaderboard_screen = LeaderboardScreen(self.leaderboard.entries)
+        self.add_widget(self.leaderboard_screen)
+
+    def game_over(self):
+        """Every ship is lost: show how the players did."""
+        results = sorted(self.results, key=lambda r: r.slot)
+        self.end_game()
+        self.results_screen = ResultsScreen(results)
+        self.add_widget(self.results_screen)
+
+    def play_again(self):
+        self.game_start(*self.last_config)
+
+    def expire_shot(self, shot):
+        shot.expiry = Clock.schedule_interval(
+            partial(self.remove_shot, shot), shot.lifetime)
+
+    def background_widget(self):
+        return next((c for c in self.children
+                     if isinstance(c, AnimatedBackground)), None)
+
+    def pause(self):
+        """Freeze the world and show the pause screen."""
+        if self.paused or not self.spaceships:
+            return
+        self.paused = True
+        self.frame_schedule.cancel()
+        self.asteroid_schedule.cancel()
+        for shot in self.shots:
+            shot.expiry.cancel()
+        for explosion in self.explosions:
+            if explosion.parent is not None:
+                explosion.pause()
+        background = self.background_widget()
+        if background is not None:
+            background.pause()
+        Spaceship.sound.stop()
+        # nothing may stay held while the touch controls are hidden
+        for controls in self.controls:
+            if controls is not None:
+                controls.held.clear()
+                controls._apply()
+                controls.show_touch_buttons(False)
+        for status in self.statuses:
+            status.show_menu = False
+        self._inputs_down.clear()
+        self.pause_screen = PauseScreen()
+        self.add_widget(self.pause_screen)
+
+    def confirm_leave(self):
+        """Ask before leaving a paused game for the main menu."""
+        self.remove_widget(self.pause_screen)
+        self.confirm_screen = ConfirmScreen('leave')
+        self.add_widget(self.confirm_screen)
+
+    def confirm_exit(self):
+        """Ask before quitting the app from the main menu."""
+        self.remove_widget(self.menu)
+        self.confirm_screen = ConfirmScreen('exit')
+        self.add_widget(self.confirm_screen)
+
+    def leave_cancel(self):
+        """Answer "No": back from the question to the screen it came from
+        (the pause screen, or the main menu)."""
+        exiting = self.confirm_screen.kind == 'exit'
+        self._drop_confirm()
+        if exiting:
+            self.show_menu()
+        else:
+            self.pause_screen = PauseScreen()
+            self.add_widget(self.pause_screen)
+
+    def _drop_confirm(self):
+        if hasattr(self, 'confirm_screen'):
+            self.remove_widget(self.confirm_screen)
+            del self.confirm_screen
+
+    def _unfreeze(self):
+        """Run the world again (the pause screen is already gone)."""
+        self.paused = False
+        self.frame_schedule = Clock.schedule_interval(self.update, 1.0/60.0)
+        self.asteroid_schedule = Clock.schedule_interval(
+            self.generate_asteroid, 2)
+        background = self.background_widget()
+        if background is not None:
+            background.resume()
+        for shot in self.shots:
+            self.expire_shot(shot)
+        for explosion in self.explosions:
+            if explosion.parent is not None:
+                explosion.resume()
+        if any(ship.thrust for ship in self.spaceships):
+            Spaceship.sound.play()
+
+    def resume(self):
+        """Leave the pause screen: play on from the frozen state."""
+        if not self.paused:
+            return
+        self.remove_widget(self.pause_screen)
+        del self.pause_screen
+        self._unfreeze()
+        self._show_touch_controls()
+
+    def end_game(self):
+        if self.paused:
+            self._drop_confirm()
+            if hasattr(self, 'pause_screen'):
+                self.remove_widget(self.pause_screen)
+                del self.pause_screen
+            self._unfreeze()
         for spaceship in list(self.spaceships):
             self.remove_spaceship(spaceship)
 
@@ -1948,6 +2449,8 @@ class SpacePilgrimGame(Widget):
         self.num_players = 1
 
     def update(self, dt):
+        if self.spaceships:
+            self.elapsed += dt
         [spaceship.update(dt) for spaceship in self.spaceships]
         [shot.update(dt) for shot in self.shots]
         [asteroid.update(dt) for asteroid in self.asteroids]
@@ -1982,8 +2485,10 @@ class SpacePilgrimGame(Widget):
                 controls.show_touch_buttons(False)   # lets go of the stick
                 self.remove_widget(controls)
                 self.controls[player] = None
+                self.results.append(PlayerResult(
+                    player, spaceship.cabin, spaceship.points, self.elapsed))
         if len(self.spaceships) == 1:
-            self.game_stop()
+            self.game_over()
         else:
             self.remove_spaceship(spaceship)
         self.add_explosion(pos)
@@ -2046,6 +2551,8 @@ class SpacePilgrimGame(Widget):
 
 class SpacePilgrimApp(App):
     use_kivy_settings = False
+    # Window icon on desktop; Android takes its icon from buildozer.spec.
+    icon = 'data/icon.png'
 
     def build(self):
         hide_system_bars()

@@ -81,24 +81,39 @@
         font_size: "17dp" if root.side == 'top' else "23dp"
         font_name: 'data/fonts/RobotoMono-Regular.ttf'
 
-    MenuButton:
+    PauseButton:
         # under the lives and points as the player reads them: below the
         # text for one player; for a touch player's turned text (middle of
         # their side, between their two controls) on the screen-edge side
-        text: "Menu"
+        text: "Pause"
         font_size: "12dp"
+        background_normal: ''
+        background_down: ''
+        background_color: 0, 0, 0, 0
         size_hint: None, None
         size: metrics.dp(44), metrics.dp(44)
         opacity: 1 if root.show_menu else 0
         disabled: not root.show_menu
         center_x: text_label.center_x if root.side == '' else (text_label.center_x - text_label.texture_size[1] / 2 - metrics.dp(28) if root.side == 'left' else text_label.center_x + text_label.texture_size[1] / 2 + metrics.dp(28))
         center_y: text_label.center_y - text_label.texture_size[1] / 2 - metrics.dp(28) if root.side == '' else text_label.center_y
-        on_press: root.parent.game_stop()
+        on_press: root.parent.pause()
         canvas.before:
             PushMatrix
             Rotate:
                 angle: -90 if root.side == 'left' else (90 if root.side == 'right' else 0)
                 origin: self.center
+            # same rounded blue outline as the join screen's side strips
+            Color:
+                rgba: 1, 1, 1, 0.3 if self.state == 'down' else 0
+            RoundedRectangle:
+                pos: self.pos
+                size: self.size
+                radius: [metrics.dp(10)]
+            Color:
+                rgba: 0.3, 0.6, 1, 1
+            Line:
+                width: metrics.dp(1.5)
+                rounded_rectangle: self.x, self.y, self.width, self.height, metrics.dp(10)
         canvas.after:
             PopMatrix
 
@@ -106,7 +121,7 @@
 <Menu>:
     orientation: "vertical"
     spacing: metrics.dp(10)
-    size: metrics.dp(300), metrics.dp(280)
+    size: metrics.dp(300), metrics.dp(340)
     pos: (Vector(*Window.size) - Vector(*self.size)) / 2
 
     Button:
@@ -118,12 +133,175 @@
         on_press: root.parent.show_ship_select(2)
 
     Button:
+        text: "Leaderboard"
+        on_press: root.parent.show_leaderboard()
+
+    Button:
         text: "Settings"
         on_press: root.parent.show_settings()
 
     Button:
         text: "Exit"
-        on_press: app.stop()
+        on_press: root.parent.confirm_exit()
+
+
+<PauseScreen>:
+    orientation: "vertical"
+    spacing: metrics.dp(10)
+    size_hint: None, None
+    size: metrics.dp(300), metrics.dp(180)
+    pos: (Vector(*Window.size) - Vector(*self.size)) / 2
+    canvas.before:
+        # dims the frozen world and takes the touches meant for it
+        Color:
+            rgba: 0, 0, 0, 0.5
+        Rectangle:
+            pos: 0, 0
+            size: Window.size
+
+    Label:
+        text: "Paused"
+        font_size: "26dp"
+        size_hint_y: None
+        height: metrics.dp(40)
+
+    Button:
+        text: "Continue"
+        on_press: root.resume()
+
+    Button:
+        text: "Main menu"
+        on_press: root.go_menu()
+
+
+<ConfirmScreen>:
+    orientation: "vertical"
+    spacing: metrics.dp(10)
+    size_hint: None, None
+    size: metrics.dp(300), metrics.dp(180)
+    pos: (Vector(*Window.size) - Vector(*self.size)) / 2
+    canvas.before:
+        Color:
+            rgba: 0, 0, 0, 0.5
+        Rectangle:
+            pos: 0, 0
+            size: Window.size
+
+    Label:
+        text: "Are you sure?"
+        font_size: "26dp"
+        size_hint_y: None
+        height: metrics.dp(40)
+
+    Button:
+        text: "Yes"
+        on_press: root.yes()
+
+    Button:
+        text: "No"
+        on_press: root.no()
+
+
+<ResultsScreen>:
+    orientation: "vertical"
+    spacing: metrics.dp(8)
+    size_hint: None, None
+    size: metrics.dp(380), min(metrics.dp(420), Window.height - metrics.dp(10))
+    pos: (Vector(*Window.size) - Vector(*self.size)) / 2
+
+    Label:
+        text: "Game over"
+        font_size: "26dp"
+        size_hint_y: None
+        height: metrics.dp(40)
+
+    BoxLayout:
+        id: rows
+        orientation: "vertical"
+
+    Label:
+        id: message
+        font_size: "13dp"
+        size_hint_y: None
+        height: metrics.dp(20)
+
+    Button:
+        id: btn_save
+        text: "Save to leaderboard"
+        size_hint_y: None
+        height: metrics.dp(44)
+        on_press: root.save_score()
+
+    Button:
+        text: "Play again"
+        size_hint_y: None
+        height: metrics.dp(44)
+        on_press: root.play_again()
+
+    Button:
+        text: "Main menu"
+        size_hint_y: None
+        height: metrics.dp(44)
+        on_press: root.go_menu()
+
+
+<NameScreen>:
+    orientation: "vertical"
+    spacing: metrics.dp(8)
+    size_hint: None, None
+    size: metrics.dp(340), metrics.dp(210)
+    pos: (Vector(*Window.size) - Vector(*self.size)) / 2
+
+    Label:
+        id: title
+        font_size: "20dp"
+
+    TextInput:
+        id: field
+        multiline: False
+        write_tab: False
+        input_filter: lambda text, from_undo: text[:max(0, 12 - len(self.text))]
+        font_size: "20dp"
+        size_hint_y: None
+        height: metrics.dp(44)
+        padding: metrics.dp(10), metrics.dp(10)
+        on_text_validate: root.accept()
+
+    Button:
+        text: "Save"
+        size_hint_y: None
+        height: metrics.dp(44)
+        on_press: root.accept()
+
+    Button:
+        text: "Cancel"
+        size_hint_y: None
+        height: metrics.dp(44)
+        on_press: root.cancel()
+
+
+<LeaderboardScreen>:
+    orientation: "vertical"
+    spacing: metrics.dp(6)
+    size_hint: None, None
+    size: metrics.dp(380), min(metrics.dp(400), Window.height - metrics.dp(10))
+    pos: (Vector(*Window.size) - Vector(*self.size)) / 2
+
+    Label:
+        text: "Leaderboard"
+        font_size: "24dp"
+        size_hint_y: None
+        height: metrics.dp(36)
+
+    BoxLayout:
+        id: rows
+        orientation: "vertical"
+
+    Button:
+        text: "Back"
+        size_hint_y: None
+        height: metrics.dp(44)
+        on_press: root.parent.show_menu()
 
 
 <SettingsScreen>:
