@@ -8,6 +8,12 @@ from collections import namedtuple
 from functools import partial
 from random import randint, choice
 
+# Mix every sound in-app with SDL2_mixer. Kivy's Android default gives each
+# sound its own MediaPlayer, and some Android TV devices let only one of them
+# be heard at a time (engine and gun cut each other off). Must be set before
+# the first kivy import.
+os.environ.setdefault('KIVY_AUDIO', 'sdl2')
+
 from kivy.utils import platform
 from kivy.animation import Animation
 from kivy.core.window import Window, Keyboard
