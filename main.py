@@ -1,4 +1,4 @@
-__version__ = "0.3.4"
+__version__ = "0.4.0"
 
 import colorsys
 import json
@@ -32,7 +32,7 @@ from kivy.graphics import (
     Color, Ellipse, Line, PopMatrix, PushMatrix, Rectangle, RoundedRectangle,
     Rotate, Triangle,
 )
-from kivy.metrics import dp, cm
+from kivy.metrics import Metrics, dp, cm
 from kivy.vector import Vector
 from kivy.clock import Clock
 from kivy.logger import Logger
@@ -71,7 +71,12 @@ DEFAULT_KEY_BINDINGS_P2 = {
 DEFAULT_PLAYER_KEYS = [DEFAULT_KEY_BINDINGS, DEFAULT_KEY_BINDINGS_P2]
 KEY_SETS = len(DEFAULT_PLAYER_KEYS)
 MAX_PLAYERS = 4   # join slots of a multiplayer game
-TOUCH_SIDES = ('left', 'right')   # at most two touch players, one per side
+TOUCH_SIDES = ('left', 'right')   # touch seats on a phone, one per side
+# on a screen big enough (see four_seat_screen) a seat at every edge
+FOUR_SEATS = TOUCH_SIDES + ('top', 'bottom')
+FOUR_SEAT_MIN_CM = (15, 10)   # landscape width x height for four seats
+# turn of what belongs to a seat (labels, joystick) to read from that seat
+SEAT_ANGLES = {'bottom': 0, 'right': 90, 'top': 180, 'left': -90}
 START_OFFSETS = [(-1, 0), (1, 0), (0, -1), (0, 1)]   # per slot, in ships
 # Used when a migrated set 1 already took a default of set 2.
 FALLBACK_SCANCODES = [92, 93, 94, 96, 89, 90, 91, 95, 97]  # keypad 4 5 6 8 ...
@@ -615,6 +620,41 @@ def has_touchscreen():
         return True
 
 
+def screen_dpi():
+    """(x, y) dots per inch of the screen. Kivy's dpi on Android is the
+    density bucket, which can be 20% or more off the real one, so ask
+    Android for the measured value there."""
+    if platform == 'android':
+        try:
+            from jnius import autoclass
+            activity = autoclass('org.kivy.android.PythonActivity').mActivity
+            metrics = activity.getResources().getDisplayMetrics()
+            xdpi, ydpi = float(metrics.xdpi), float(metrics.ydpi)
+            # some devices report nonsense: trust it only near the bucket
+            bucket = float(metrics.densityDpi)
+            if all(bucket / 2 < d < bucket * 2 for d in (xdpi, ydpi)):
+                return xdpi, ydpi
+        except Exception:
+            pass
+    return Metrics.dpi, Metrics.dpi
+
+
+def four_seat_screen(size=None, dpi=None):
+    """Whether the screen is big enough (a tablet, not a phone) for four
+    touch players, one at each edge."""
+    width, height = size or Window.size
+    xdpi, ydpi = dpi or screen_dpi()
+    width_cm, height_cm = width / xdpi * 2.54, height / ydpi * 2.54
+    min_w, min_h = FOUR_SEAT_MIN_CM
+    return (max(width_cm, height_cm) >= min_w
+            and min(width_cm, height_cm) >= min_h)
+
+
+def touch_seats():
+    """The seats of touch players on this screen."""
+    return FOUR_SEATS if four_seat_screen() else TOUCH_SIDES
+
+
 class Explosion(Widget):
     frame = NumericProperty(0)
     texture = ObjectProperty()
@@ -762,29 +802,74 @@ class PauseButton(Button):
 class SpaceshipStatus(Widget):
     spaceship = ObjectProperty()
     show_menu = BooleanProperty(False)  # touch player: show the Pause button
-    # '' one player (top right); multiplayer: 'left' / 'right' for a touch
-    # player's side, 'top' for keyboard and gamepad players
+    # '' one player (top right). Multiplayer: a touch player's seat ('left',
+    # 'right', 'top', 'bottom'); keyboard and gamepad players 'row' (a column
+    # of the top row) or, when touch players sit at the top or bottom edge,
+    # 'corner' (a corner of the screen), both chosen by `column`
     side = StringProperty('')
-    column = NumericProperty(0)         # 'top': the player's slot
-    # 'left' / 'right': distance from that screen edge to the inner side of
-    # the player's touch controls; the block sits just inside it
+    column = NumericProperty(0)         # 'row' and 'corner': the player's slot
+    # touch seat: distance from that screen edge to the inner side of the
+    # player's touch controls; the block sits just inside it
     inset = NumericProperty(0)
+    color = ListProperty([1, 1, 1, 1])  # tint of the text: the cabin colour
+
+    # direction from the lives and points to the Pause button: toward the
+    # screen edge of a touch player, under the text for one player
+    PAUSE_DIRECTIONS = {'left': (-1, 0), 'right': (1, 0), 'top': (0, 1),
+                        'bottom': (0, -1)}
 
     def follow(self, touch_buttons):
         """Keep the block next to the touch controls of its player, whatever
-        their size: the joystick is the widest control of the column."""
+        their size: the joystick is the deepest control of the seat."""
         stick = touch_buttons.stick
 
         def place(*args):
             gap = dp(8)
-            if self.side == 'left':
-                self.inset = stick.right - touch_buttons.x + gap
-            else:
-                self.inset = touch_buttons.right - stick.x + gap
+            self.inset = gap + {
+                'left': stick.right - touch_buttons.x,
+                'right': touch_buttons.right - stick.x,
+                'top': touch_buttons.top - stick.y,
+                'bottom': stick.top - touch_buttons.y,
+            }[self.side]
         stick.bind(pos=place, size=place)
         touch_buttons.bind(pos=place, size=place)
         place()
-    color = ListProperty([1, 1, 1, 1])  # tint of the text: the cabin colour
+
+    @staticmethod
+    def angle_of(side):
+        """Turn of the text and Pause button: upright from the seat."""
+        return SEAT_ANGLES.get(side, 0)
+
+    def label_center(self, text_size, window_size, side, inset, column):
+        """Centre of the lives and points (`text_size` is the unturned
+        texture size: turned a quarter, its height runs across the edge)."""
+        w, h = window_size
+        across = text_size[1] / 2
+        if side == 'left':
+            return inset + across, h / 2
+        if side == 'right':
+            return w - inset - across, h / 2
+        if side == 'top':
+            return w / 2, h - inset - across
+        if side == 'bottom':
+            return w / 2, inset + across
+        if side == 'row':
+            return w * (column + 0.5) / 4, h - 50
+        if side == 'corner':
+            # the middle of the free corner square, in slot order: top-left,
+            # top-right, bottom-left, bottom-right
+            half = dp(CORNER_DP) / 2
+            return (half if column % 2 == 0 else w - half,
+                    h - half if column < 2 else half)
+        return w - dp(210), h - 50
+
+    def pause_center(self, label_center, text_size, side):
+        """The Pause button sits under the lives and points as the player
+        reads them: for a touch player on the screen-edge side of the text,
+        between their two controls."""
+        dx, dy = self.PAUSE_DIRECTIONS.get(side, (0, -1))
+        offset = text_size[1] / 2 + dp(28)
+        return label_center[0] + dx * offset, label_center[1] + dy * offset
 
 
 class ButtonColumn(BoxLayout):
@@ -1137,6 +1222,11 @@ class FireButton(Widget):
 STICK_DP = 110
 FIRE_DP = 76
 MARGIN_DP = 30    # space between the touch controls and the screen edges
+# four-seat layout with keyboard or gamepad players: free corner squares
+# this big hold their lives and points
+CORNER_DP = 140
+PAUSE_DP = 44     # the Pause button between a touch player's two controls
+STATUS_DP = 44    # a touch player's lives and points across, with the gap
 
 
 class Joystick(Widget):
@@ -1146,7 +1236,7 @@ class Joystick(Widget):
     screen: up is then away from the player."""
     THRESHOLD = 0.35        # share of the radius needed to trigger an action
     knob = ListProperty([0.0, 0.0])   # offset from the centre, -1..1
-    angle = NumericProperty(0)        # seat: -90 left side, 90 right side
+    angle = NumericProperty(0)        # seat, see SEAT_ANGLES
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -1264,7 +1354,11 @@ class ScreenButtonsLayout(Widget):
     """Touch overlay: joystick bottom-left, fire bottom-right. A hidden
     layout lets all touches through."""
     active = BooleanProperty(True)
-    side = StringProperty('')    # '' whole screen; 'left' / 'right' half
+    side = StringProperty('')    # '' whole screen; else the seat's edge
+    # a top or bottom seat is taken: every edge has a seat (_layout_edge)
+    edges = BooleanProperty(False)
+    # keyboard and gamepad players' lives and points sit in the corners
+    free_corners = BooleanProperty(False)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -1273,7 +1367,8 @@ class ScreenButtonsLayout(Widget):
         self.add_widget(self.stick)
         self.fire = FireButton(size=(dp(FIRE_DP), dp(FIRE_DP)), size_hint=(None, None))
         self.add_widget(self.fire)
-        self.bind(size=self._layout)
+        self.bind(size=self._layout, edges=self._layout,
+                  free_corners=self._layout)
         self._layout()
 
     def set_scale(self, scale):
@@ -1291,7 +1386,11 @@ class ScreenButtonsLayout(Widget):
         # the window height and half its width allow, so they do not overlap
         margin = dp(MARGIN_DP)
         if self.side:
-            self._layout_side(margin)
+            self.fire.text_angle = self.stick.angle = SEAT_ANGLES[self.side]
+            if self.edges:
+                self._layout_edge(margin)
+            else:
+                self._layout_side(margin)
             return
         limit = max(min(self.height - margin - cm(0.5),
                         self.width / 2 - margin * 1.5), cm(1))
@@ -1323,10 +1422,6 @@ class ScreenButtonsLayout(Widget):
         self.stick.size = (stick, stick)
         self.fire.size = (fire, fire)
         top = self.height - top_room
-        # the FIRE label reads upright from the player's seat, and the stick
-        # pushes away from the player for thrust
-        self.fire.text_angle = -90 if self.side == 'left' else 90
-        self.stick.angle = self.fire.text_angle
         if self.side == 'left':
             x = margin
             self.stick.pos = (x, top - stick)
@@ -1335,6 +1430,77 @@ class ScreenButtonsLayout(Widget):
             x = self.width - margin - stick
             self.stick.pos = (x, margin)
             self.fire.pos = (x + (stick - fire) / 2, top - fire)
+
+    def _edge_sizes(self, margin, gap):
+        """Joystick and FIRE size of the four-seat layout and how far from
+        the middle of an edge its controls reach: one size and one reach
+        for every seat, the controls made smaller until each half of an
+        edge holds the bigger control and half the Pause button."""
+        stick, fire = (size * self.scale for size in self._base_sizes())
+        pause = dp(PAUSE_DP) + 2 * gap
+
+        def reach(stick):
+            # the controls of the short edges (left and right in landscape,
+            # top and bottom in portrait) go as far as the screen margin,
+            # those of the long edges keep clear of the short edges' column
+            # (controls, then lives and points); the corners stay free for
+            # keyboard and gamepad players' lives and points
+            column = margin + stick + dp(STATUS_DP)
+            short, long = sorted(self.size)
+            half = min(short / 2 - margin, long / 2 - column - gap)
+            if self.free_corners:
+                corner = dp(CORNER_DP) + gap
+                half = min(half, self.height / 2 - corner,
+                           self.width / 2 - corner)
+            return half
+
+        def fits(k):
+            # the lives, points and Pause sit at the middle of the edge
+            return reach(stick * k) >= k * max(stick, fire) + pause / 2
+        k = 1.0
+        if not fits(k):      # the biggest share that fits
+            low, high = 0.0, 1.0
+            for _ in range(30):
+                mid = (low + high) / 2
+                low, high = (mid, high) if fits(mid) else (low, mid)
+            k = low
+        stick, fire = max(stick * k, cm(1)), max(fire * k, cm(1))
+        return stick, fire, reach(stick)
+
+    def _layout_edge(self, margin):
+        """Up to four players sit one at each edge, facing the centre. Each
+        has the two controls on either side of the middle of their edge,
+        joystick under the left hand and FIRE under the right hand as seen
+        from the seat: left side joystick top, FIRE bottom; right side FIRE
+        top, joystick bottom; bottom joystick left, FIRE right; top FIRE
+        left, joystick right. Every seat has them the same distance apart,
+        as far apart as the screen allows: on a wide screen the left and
+        right controls are in the corners, as with two players, on a tall
+        one the top and bottom ones. FIRE is
+        centred in the band of the joystick, the deepest control."""
+        gap = cm(0.3)
+        stick, fire, half = self._edge_sizes(margin, gap)
+        self.stick.size = (stick, stick)
+        self.fire.size = (fire, fire)
+        w, h = self.size
+        inner = margin + (stick - fire) / 2   # FIRE from the edge
+        side = self.side
+        if side in ('left', 'right'):
+            low, high = h / 2 - half, h / 2 + half
+        else:
+            low, high = w / 2 - half, w / 2 + half
+        if side == 'left':
+            self.stick.pos = (margin, high - stick)
+            self.fire.pos = (inner, low)
+        elif side == 'right':
+            self.stick.pos = (w - margin - stick, low)
+            self.fire.pos = (w - inner - fire, high - fire)
+        elif side == 'bottom':
+            self.stick.pos = (low, margin)
+            self.fire.pos = (high - fire, inner)
+        else:
+            self.stick.pos = (high - stick, h - margin - stick)
+            self.fire.pos = (low, h - inner - fire)
 
     def press(self, action):
         if self.parent is not None:
@@ -1361,7 +1527,9 @@ class ControlsManager(Widget):
     """Turns abstract actions (up, left, right, fire) into spaceship
     commands. Actions come from keyboard, gamepad and on-screen buttons."""
     spaceship = ObjectProperty()
-    side = StringProperty('')   # touch controls: '', 'left' or 'right' half
+    side = StringProperty('')   # touch controls: '' or the seat's edge
+    edges = BooleanProperty(False)          # see ScreenButtonsLayout
+    free_corners = BooleanProperty(False)   # see ScreenButtonsLayout
     # 'auto': shown by the touch setting (single player); 'on' for a player
     # who joined by touch; 'off' for keyboard and gamepad players
     touch = StringProperty('auto')
@@ -1369,7 +1537,9 @@ class ControlsManager(Widget):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.held = set()
-        self.touch_buttons = ScreenButtonsLayout(side=self.side)
+        self.touch_buttons = ScreenButtonsLayout(
+            side=self.side, edges=self.edges,
+            free_corners=self.free_corners)
         self.add_widget(self.touch_buttons)
 
     def show_touch_buttons(self, visible):
@@ -1511,9 +1681,10 @@ def device_kind(device):
 
 
 class SideJoinButton(ButtonBehavior, Widget):
-    """Tall strip at the left or right edge of the join screen: tapping it
-    joins a touch player who sits on that side. The label is turned to read
-    from that seat, like the FIRE label in the game."""
+    """Strip along an edge of the join screen (tall at the left and right,
+    wide at the top and bottom): tapping it joins a touch player who sits
+    at that edge. The label is turned to read from that seat, like the FIRE
+    label in the game."""
     side = StringProperty('left')
     text = StringProperty('')
 
@@ -1549,42 +1720,52 @@ class SideJoinButton(ButtonBehavior, Widget):
         label.color = (1, 1, 1, 0.5 if self.disabled else 1)
         # from pos and size: `center` can still be stale while resizing
         center = (x + w / 2, y + h / 2)
-        label.size = (h, w)            # turned a quarter: runs along the strip
-        label.text_size = (h - dp(16), w)
+        if self.side in ('left', 'right'):
+            w, h = h, w                # turned a quarter: runs along the strip
+        label.size = (w, h)
+        label.text_size = (w - dp(16), h)
         label.center = center
         self._turn.origin = center
-        self._turn.angle = -90 if self.side == 'left' else 90
+        self._turn.angle = SEAT_ANGLES[self.side]
 
 
 class JoinScreen(BoxLayout):
     """Multiplayer: each player joins a slot with the device they play with
-    (FIRE on a keyboard set or gamepad, or the touch strip at the side of
+    (FIRE on a keyboard set or gamepad, or the touch strip at the edge of
     the screen where they sit), then picks a colour and gets ready with
     that device. The slot shows the
     device and lights up on its input, so everyone sees which keys or pad
     drive which ship. A device is (kind, id): ('keys', set),
-    ('pad', stick id) or ('touch', 'left' / 'right')."""
+    ('pad', stick id) or ('touch', seat) with a seat of `seats`."""
     FLASH_TIME = 0.25
 
     STRIP_WIDTH = dp(64)
 
-    def __init__(self, colors, bindings, touch=True, **kwargs):
+    def __init__(self, colors, bindings, touch=True, seats=TOUCH_SIDES,
+                 **kwargs):
         super().__init__(spacing=dp(10), **kwargs)
         self.ship_colors = colors
         self.bindings = bindings
         self.touch = touch      # offer joining by touch (side strips)
+        self.seats = seats      # touch seats: left and right, or every edge
+        four = 'top' in seats
         self.slots = [None] * MAX_PLAYERS
         self.ready = [False] * MAX_PLAYERS
         self.flashing = [False] * MAX_PLAYERS
-        # the whole window width, so the touch strips are at the screen
-        # edges; fits small phones (about 360dp high in landscape) and TVs
+        # the whole window width (and with four seats its height), so the
+        # touch strips are at the screen edges; fits small phones (about
+        # 360dp high in landscape) and TVs
+        panels_height = min(dp(450), Window.height - dp(10))
         self.size = (Window.width - dp(10),
-                     min(dp(450), Window.height - dp(10)))
+                     Window.height - dp(10) if four else panels_height)
+        across = {'left': 'x', 'right': 'x', 'top': 'y', 'bottom': 'y'}
         self.side_buttons = {
             side: SideJoinButton(
-                side=side, size_hint_x=None, width=self.STRIP_WIDTH,
-                on_press=lambda b: self.join_touch(b.side))
-            for side in TOUCH_SIDES}
+                side=side, on_press=lambda b: self.join_touch(b.side),
+                **{'size_hint_' + across[side]: None,
+                   ('width' if across[side] == 'x' else 'height'):
+                       self.STRIP_WIDTH})
+            for side in seats}
         middle = BoxLayout(
             orientation='vertical', spacing=dp(10), size_hint_x=None,
             width=min(dp(190) * MAX_PLAYERS + dp(30),
@@ -1601,7 +1782,20 @@ class JoinScreen(BoxLayout):
         bottom.add_widget(self.back_button)
         bottom.add_widget(self.message)
         middle.add_widget(bottom)
-        for widget in (self.side_buttons['left'], Widget(), middle, Widget(),
+        centre = (Widget(), middle, Widget())
+        if four:
+            # top and bottom strips between the left and right ones, the
+            # panels in the middle
+            middle.size_hint_y = None
+            middle.height = min(panels_height,
+                                self.height - 2 * (self.STRIP_WIDTH + dp(10)))
+            middle.pos_hint = {'center_x': 0.5}
+            column = BoxLayout(orientation='vertical', spacing=dp(10))
+            for widget in (self.side_buttons['top'], Widget(), middle,
+                           Widget(), self.side_buttons['bottom']):
+                column.add_widget(widget)
+            centre = (column,)
+        for widget in (self.side_buttons['left'], *centre,
                        self.side_buttons['right']):
             self.add_widget(widget)
         self.bind(size=self._center, parent=self._center)
@@ -1646,10 +1840,7 @@ class JoinScreen(BoxLayout):
             'action_row': row(ready, leave),
             'hint': Label(size_hint_y=None, height=dp(34), font_size='12dp',
                           halign='center'),
-            'empty': Label(text='Press FIRE on a keyboard set or gamepad'
-                                '\n\nor tap a side of the screen to play '
-                                'by touch there',
-                           halign='center', valign='middle'),
+            'empty': Label(halign='center', valign='middle'),
         }
         empty = widgets['empty']
         empty.bind(size=lambda label, size: setattr(label, 'text_size', size))
@@ -1695,7 +1886,10 @@ class JoinScreen(BoxLayout):
 
     def join_touch(self, side):
         """A touch player sits at the `side` whose strip they tapped and
-        takes the first free slot; one per side."""
+        takes the first free slot; one per side, and only at the seats of
+        this screen."""
+        if side not in self.seats:
+            return None
         return self.join(('touch', side))
 
     def leave(self, slot):
@@ -1800,8 +1994,10 @@ class JoinScreen(BoxLayout):
                 w['border_color'].rgba = (1, 1, 1, 0.3)
                 w['empty'].text = (
                     'Press FIRE on a keyboard set or gamepad' + (
-                        '\n\nor tap a side of the screen to play by touch '
-                        'there' if self.touch else ''))
+                        '\n\nor tap {} of the screen to play by touch '
+                        'there'.format('an edge' if 'top' in self.seats
+                                       else 'a side')
+                        if self.touch else ''))
                 panel.add_widget(w['empty'])
                 continue
             color = self.ship_colors.colors[slot]
@@ -1954,6 +2150,12 @@ class SpacePilgrimGame(Widget):
         entries = ([(0, None)] if slots is None
                    else [(i, d) for i, d in enumerate(slots) if d])
         self.num_players = len(entries)
+        # a player at the top or bottom edge: a seat at every edge, and the
+        # keyboard and gamepad players' lives and points in the corners
+        edges = any(device_kind(d) == 'touch' and d[1] in ('top', 'bottom')
+                    for _, d in entries)
+        free_corners = edges and any(device_kind(d) != 'touch'
+                                     for _, d in entries)
 
         self.statuses = []
         self.controls = [None] * (len(slots) if slots is not None else 1)
@@ -1965,7 +2167,7 @@ class SpacePilgrimGame(Widget):
             if slots is None:
                 side = ''
             else:
-                side = touch_side or 'top'
+                side = touch_side or ('corner' if edges else 'row')
             status = SpaceshipStatus(
                 spaceship=spaceship, side=side, column=slot,
                 color=(*cabin_rgb(colors[slot]), 1))
@@ -1974,7 +2176,8 @@ class SpacePilgrimGame(Widget):
             touch = ('auto' if slots is None
                      else 'on' if kind == 'touch' else 'off')
             controls = ControlsManager(
-                spaceship=spaceship, side=touch_side, touch=touch)
+                spaceship=spaceship, side=touch_side, touch=touch,
+                edges=edges, free_corners=free_corners)
             controls.touch_buttons.set_scale(self.touch_settings.scale)
             if touch_side:
                 status.follow(controls.touch_buttons)
@@ -2194,7 +2397,8 @@ class SpacePilgrimGame(Widget):
             self.select = ShipSelectScreen(self.ship_colors, 1)
         else:
             self.select = JoinScreen(self.ship_colors, self.bindings,
-                                     touch=self.has_touch)
+                                     touch=self.has_touch,
+                                     seats=touch_seats())
         self.add_widget(self.select)
 
     def start_selected(self):

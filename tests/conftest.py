@@ -15,3 +15,14 @@ os.environ.setdefault("KCFG_GRAPHICS_WINDOW_STATE", "hidden")
 ROOT = Path(__file__).resolve().parent.parent
 os.chdir(ROOT)  # main.py loads assets using paths relative to the project
 sys.path.insert(0, str(ROOT))
+
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def two_touch_seats(monkeypatch):
+    """Tests run on a phone-sized screen with two touch seats, whatever the
+    dpi of the machine; tests of four seats patch this back."""
+    import main
+    monkeypatch.setattr(main, 'four_seat_screen', lambda *a, **k: False)

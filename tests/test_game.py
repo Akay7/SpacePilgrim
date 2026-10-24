@@ -3,6 +3,9 @@ import pytest
 import main
 from main import Asteroid, Shot, Spaceship, SpacePilgrimGame
 
+# the real check: conftest makes every test a two-seat screen
+four_seat_screen = main.four_seat_screen
+
 
 def test_sounds_loaded_at_import():
     # SoundLoader.load returns None when decoding fails; every class that
@@ -1075,7 +1078,7 @@ def test_back_from_any_player_pauses_two_player_game(game2):
 def test_one_status_block_per_ship(game2, game):
     assert len(game2.statuses) == 2
     one, two = game2.statuses
-    assert (one.side, two.side) == ('top', 'top')   # keyboard players
+    assert (one.side, two.side) == ('row', 'row')   # keyboard players
     assert (one.column, two.column) == (0, 1)
     assert one.spaceship is game2.spaceships[0]
     assert tuple(one.color[:3]) == pytest.approx(
@@ -1517,7 +1520,7 @@ def test_mixed_game_status_positions_angles_and_colours(kv_game):
         return [i.angle for i in label(status).canvas.before.children
                 if isinstance(i, Rotate)][0]
 
-    assert [s.side for s in game.statuses] == ['top', 'left', 'top', 'right']
+    assert [s.side for s in game.statuses] == ['row', 'left', 'row', 'right']
     assert [angle(s) for s in game.statuses] == [0, -90, 0, 90]
     for status, column in ((keys, 0), (pad, 2)):
         assert label(status).center_x == pytest.approx(
@@ -2154,3 +2157,436 @@ def test_exit_escape_closes_popup_and_yes_quits(kv_game, monkeypatch):
     _press(game, 273)                  # up: Yes
     _press(game, KEY_ENTER)
     assert stopped
+
+
+# ---- four touch seats on a big screen ----------------------------------
+
+def _px(width_cm, height_cm, dpi=160):
+    return (width_cm / 2.54 * dpi, height_cm / 2.54 * dpi)
+
+
+@pytest.mark.parametrize('cm_size, four', [
+    ((21, 13), True),       # 10" tablet
+    ((15, 10), True),       # just big enough
+    ((15, 7), False),       # phone
+    ((15.5, 8.7), False),   # 7" tablet
+    ((14, 12), False),      # too narrow
+])
+@pytest.mark.parametrize('dpi', [160, 320])
+def test_four_seats_need_a_big_screen(cm_size, four, dpi):
+    size = _px(*cm_size, dpi)
+    assert four_seat_screen(size, (dpi, dpi)) is four
+    # also when the size arrives the other way round
+    assert four_seat_screen(size[::-1], (dpi, dpi)) is four
+
+
+def test_four_seats_measure_each_axis():
+    # 21 x 13 cm in pixels but a screen twice as dense across: 21 x 6.5 cm
+    assert not four_seat_screen(_px(21, 13), (160, 320))
+
+
+def test_touch_seats_follow_the_screen(monkeypatch):
+    assert main.touch_seats() == ('left', 'right')
+    monkeypatch.setattr(main, 'four_seat_screen', lambda *a: True)
+    assert main.touch_seats() == ('left', 'right', 'top', 'bottom')
+
+
+def test_screen_dpi_off_android_is_kivys():
+    assert main.screen_dpi() == (main.Metrics.dpi, main.Metrics.dpi)
+
+
+TOUCH4 = [('touch', 'left'), ('touch', 'right'), ('touch', 'top'),
+          ('touch', 'bottom')]
+
+
+@pytest.fixture
+def touch4(start_game):
+    return start_game(slots=TOUCH4)
+
+
+def _overlap(a, b):
+    return (a.x < b.right and b.x < a.right and a.y < b.top and b.y < a.top)
+
+
+@pytest.mark.parametrize('side, forward, left, right', [
+    # screen directions (dx, dy) of "away from me", "my left", "my right"
+    ('top', (0, -0.9), (0.9, 0), (-0.9, 0)),
+    ('bottom', (0, 0.9), (-0.9, 0), (0.9, 0)),
+    ('left', (0.9, 0), (0, 0.9), (0, -0.9)),
+    ('right', (-0.9, 0), (0, -0.9), (0, 0.9)),
+])
+def test_edge_stick_is_turned_toward_the_seat(touch4, side, forward, left,
+                                              right):
+    controls = touch4.controls[[d[1] for d in TOUCH4].index(side)]
+    layout, ship = controls.touch_buttons, controls.spaceship
+    layout.size = (1000, 600)
+    assert layout.stick.angle == main.SEAT_ANGLES[side]
+    assert layout.fire.text_angle == main.SEAT_ANGLES[side]
+    for pos, thrust, rotation in ((forward, True, 0), (left, False, 3),
+                                  (right, False, -3)):
+        touch, consumed = _touch_down(layout, _stick_pos(layout, *pos))
+        assert consumed
+        assert (ship.thrust, ship.angle_rotation) == (thrust, rotation), pos
+        _release(touch, layout.stick)
+        assert not ship.thrust and ship.angle_rotation == 0
+
+
+def test_top_stick_marks_point_to_the_seat_directions(touch4):
+    top = touch4.controls[2].touch_buttons
+    top.size = (1000, 600)
+    stick = top.stick
+    up_mark = stick._marks[0].points            # the thrust mark
+    assert up_mark[1] < stick.center_y - stick.width * 0.3   # toward the centre
+    assert abs(up_mark[0] - stick.center_x) < 1e-6
+
+
+@pytest.mark.parametrize('size', [_px(15, 10), _px(21, 13), (1920, 1080),
+                                  _px(10, 15), (1080, 1920)])
+@pytest.mark.parametrize('scale', [0.5, 1.0, 4.0])
+@pytest.mark.parametrize('free_corners', [False, True])
+def test_four_touch_sets_share_the_edges(touch4, scale, size, free_corners):
+    layouts = [c.touch_buttons for c in touch4.controls]
+    assert all(layout.edges for layout in layouts)
+    for layout in layouts:
+        layout.size = size
+        layout.set_scale(scale)
+        layout.free_corners = free_corners   # a keyboard player is in a corner
+    w, h = size
+    margin = main.dp(main.MARGIN_DP)
+    corner = main.dp(main.CORNER_DP)
+    pads = [pad for layout in layouts for pad in (layout.stick, layout.fire)]
+    for pad in pads:
+        assert pad.x >= margin - 1e-6 and pad.right <= w - margin + 1e-6
+        assert pad.y >= margin - 1e-6 and pad.top <= h - margin + 1e-6
+        if free_corners:
+            assert not ((pad.x < corner or pad.right > w - corner)
+                        and (pad.y < corner or pad.top > h - corner)), pad
+    for i, a in enumerate(pads):
+        for b in pads[i + 1:]:
+            assert not _overlap(a, b), (scale, size)
+    # one size for everybody
+    assert len({round(layout.stick.width, 6) for layout in layouts}) == 1
+    assert len({round(layout.fire.width, 6) for layout in layouts}) == 1
+    # under the left hand the joystick, under the right hand FIRE
+    left, right, top, bottom = layouts
+    assert left.stick.y > left.fire.top and left.stick.x == pytest.approx(margin)
+    assert right.fire.y > right.stick.top
+    assert w - right.stick.right == pytest.approx(margin)
+    assert top.fire.right < top.stick.x
+    assert h - top.stick.top == pytest.approx(margin)
+    assert bottom.stick.right < bottom.fire.x
+    assert bottom.stick.y == pytest.approx(margin)
+    # the same distance between the two controls on every edge, the same
+    # span around the middle of the edge
+    between = left.stick.y - left.fire.top
+    assert right.fire.y - right.stick.top == pytest.approx(between)
+    assert bottom.fire.x - bottom.stick.right == pytest.approx(between)
+    assert top.stick.x - top.fire.right == pytest.approx(between)
+    assert (left.fire.y + left.stick.top) / 2 == pytest.approx(h / 2)
+    assert (bottom.stick.x + bottom.fire.right) / 2 == pytest.approx(w / 2)
+    assert (top.fire.x + top.stick.right) / 2 == pytest.approx(w / 2)
+
+
+def test_large_controls_shrink_to_fit_four_seats(touch4):
+    layout = touch4.controls[0].touch_buttons
+    layout.size = _px(15, 10)
+    layout.set_scale(1.0)
+    normal = layout.stick.width
+    layout.set_scale(4.0)
+    assert normal <= layout.stick.width < normal * 4
+
+
+@pytest.mark.parametrize('size', [_px(21, 13), (1920, 1080)])
+def test_wide_screen_puts_side_controls_in_the_corners(touch4, size):
+    """The top and bottom pairs sit around the middle of the long edges, so
+    on a wide screen the left and right ones reach the corners."""
+    layouts = [c.touch_buttons for c in touch4.controls]
+    for layout in layouts:
+        layout.size = size
+    left, right, top, bottom = layouts
+    w, h = size
+    margin = main.dp(main.MARGIN_DP)
+    assert left.fire.y == pytest.approx(margin)
+    assert left.stick.top == pytest.approx(h - margin)
+    assert right.stick.y == pytest.approx(margin)
+    assert right.fire.top == pytest.approx(h - margin)
+    # the top and bottom pairs as far apart, around the middle of the edge
+    assert bottom.stick.x == pytest.approx(w / 2 - (h / 2 - margin))
+    assert top.fire.x == pytest.approx(w / 2 - (h / 2 - margin))
+
+
+@pytest.mark.parametrize('size', [_px(13, 21), (1080, 1920)])
+def test_tall_screen_puts_top_and_bottom_controls_in_the_corners(touch4,
+                                                                 size):
+    """Turned upright, the same as a wide screen turned a quarter: the top
+    and bottom controls reach the corners, the left and right pairs sit
+    around the middle of the long edges."""
+    layouts = [c.touch_buttons for c in touch4.controls]
+    for layout in layouts:
+        layout.size = size
+    left, right, top, bottom = layouts
+    w, h = size
+    margin = main.dp(main.MARGIN_DP)
+    assert bottom.stick.x == pytest.approx(margin)
+    assert bottom.fire.right == pytest.approx(w - margin)
+    assert top.fire.x == pytest.approx(margin)
+    assert top.stick.right == pytest.approx(w - margin)
+    assert left.fire.y == pytest.approx(h / 2 - (w / 2 - margin))
+    assert right.stick.y == pytest.approx(h / 2 - (w / 2 - margin))
+
+
+def test_keyboard_player_keeps_a_corner_free(start_game):
+    game = start_game(slots=[('touch', 'left'), ('touch', 'top'),
+                             ('keys', 0), None])
+    layout = game.controls[0].touch_buttons
+    assert layout.free_corners
+    layout.size = (1920, 1080)
+    corner = main.dp(main.CORNER_DP)
+    assert layout.fire.y >= corner and layout.stick.top <= 1080 - corner
+    touch4 = start_game(slots=TOUCH4)
+    assert not any(c.touch_buttons.free_corners for c in touch4.controls)
+
+
+def test_left_and_right_touch_players_keep_the_corners(touch2):
+    assert not any(c.touch_buttons.edges for c in touch2.controls)
+
+
+@pytest.mark.parametrize('seat', ['top', 'bottom'])
+def test_top_or_bottom_seat_frees_the_corners(start_game, seat):
+    game = start_game(slots=[('touch', 'left'), ('touch', seat),
+                             ('keys', 0), None])
+    left, other, keys = game.controls[:3]
+    assert left.touch_buttons.edges and other.touch_buttons.edges
+    assert other.touch_buttons.side == seat
+    assert keys.touch == 'off'
+
+
+@pytest.fixture(params=['landscape', 'portrait'])
+def window_15x10(request):
+    """A 15 x 10 cm tablet screen (160 dpi, so dp are pixels), held either
+    way round."""
+    from kivy.core.window import Window
+    old = Window.size
+    size = tuple(round(v) for v in _px(15, 10))
+    Window.size = size if request.param == 'landscape' else size[::-1]
+    yield Window.size
+    Window.size = old
+
+
+def _box(center, width, height):
+    cx, cy = center
+    return (cx - width / 2, cy - height / 2, cx + width / 2, cy + height / 2)
+
+
+def _boxes_overlap(a, b):
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+
+def _pad_box(pad):
+    return (pad.x, pad.y, pad.right, pad.top)
+
+
+def _status_boxes(status):
+    """Screen boxes of the turned lives and points and of the Pause button."""
+    label = status.ids.text_label
+    label.texture_update()      # text is otherwise rendered next frame
+    tw, th = label.texture_size
+    if status.side in ('left', 'right'):
+        tw, th = th, tw
+    pause = status.ids.pause
+    return (_box(label.center, tw, th),
+            _box(pause.center, pause.width, pause.height))
+
+
+@pytest.mark.parametrize('scale', [0.5, 1.0, 3.0, 4.0])
+def test_four_touch_status_blocks_overlap_nothing(kv_game, window_15x10,
+                                                  scale):
+    game = kv_game
+    game.touch_settings.scale = scale
+    game.game_start(slots=TOUCH4)
+    w, h = window_15x10
+    for status in game.statuses:
+        status.spaceship.points = 12345        # the longest text in practice
+    pads = [_pad_box(pad) for c in game.controls
+            for pad in (c.touch_buttons.stick, c.touch_buttons.fire)]
+    blocks = []
+    for status, controls in zip(game.statuses, game.controls):
+        text, pause = _status_boxes(status)
+        stick = controls.touch_buttons.stick
+        side = status.side
+        assert status.show_menu
+        # at the middle of the edge, just inside the player's controls, and
+        # the Pause button on the edge side of the text
+        label = status.ids.text_label
+        if side in ('left', 'right'):
+            assert label.center_y == pytest.approx(h / 2)
+        else:
+            assert label.center_x == pytest.approx(w / 2)
+        inner = {'left': text[0] >= stick.right, 'right': text[2] <= stick.x,
+                 'top': text[3] <= stick.y, 'bottom': text[1] >= stick.top}
+        assert inner[side], (scale, side)
+        dx, dy = status.PAUSE_DIRECTIONS[side]
+        assert ((status.ids.pause.center_x - label.center_x) * dx
+                + (status.ids.pause.center_y - label.center_y) * dy) > 0
+        for box in (text, pause):
+            assert 0 <= box[0] and box[2] <= w and 0 <= box[1] and box[3] <= h
+            for pad in pads:
+                assert not _boxes_overlap(box, pad), (scale, side)
+        blocks += [text, pause]
+    for i, a in enumerate(blocks):
+        for b in blocks[i + 1:]:
+            assert not _boxes_overlap(a, b), scale
+
+
+def test_top_and_bottom_status_follow_a_later_scale_change(kv_game,
+                                                           window_15x10):
+    game = kv_game
+    game.game_start(slots=TOUCH4)
+    for status, controls in list(zip(game.statuses, game.controls))[2:]:
+        layout = controls.touch_buttons
+        layout.set_scale(0.6)
+        text, _ = _status_boxes(status)
+        if status.side == 'top':
+            assert text[3] <= layout.stick.y
+            assert text[3] > layout.stick.y - main.dp(20)
+        else:
+            assert text[1] >= layout.stick.top
+            assert text[1] < layout.stick.top + main.dp(20)
+
+
+def test_top_and_bottom_status_read_from_their_seat(kv_game):
+    from kivy.graphics import Rotate
+    game = kv_game
+    game.game_start(slots=TOUCH4)
+
+    def angles(widget):
+        return [i.angle for i in widget.canvas.before.children
+                if isinstance(i, Rotate)]
+    for status in game.statuses:
+        expected = main.SEAT_ANGLES[status.side]
+        assert angles(status.ids.text_label) == [expected]
+        assert angles(status.ids.pause) == [expected]
+
+
+@pytest.mark.parametrize('scale', [0.5, 1.0, 4.0])
+def test_keyboard_player_with_a_top_seat_sits_in_a_corner(kv_game,
+                                                          window_15x10,
+                                                          scale):
+    game = kv_game
+    game.touch_settings.scale = scale
+    game.game_start(slots=[('touch', 'top'), ('touch', 'left'), ('keys', 0),
+                           None])
+    top, left, keys = game.statuses
+    assert keys.side == 'corner' and keys.column == 2
+    assert not keys.show_menu
+    keys.spaceship.points = 12345
+    w, h = window_15x10
+    text, _ = _status_boxes(keys)
+    corner = main.dp(main.CORNER_DP)
+    assert text[0] >= 0 and text[1] >= 0          # bottom-left corner
+    assert text[2] <= corner and text[3] <= corner
+    pads = [_pad_box(pad) for c in game.controls[:2]
+            for pad in (c.touch_buttons.stick, c.touch_buttons.fire)]
+    others = [box for s in (top, left) for box in _status_boxes(s)]
+    for box in pads + others:
+        assert not _boxes_overlap(text, box), scale
+
+
+def test_keyboard_and_gamepad_corners_follow_player_order(kv_game,
+                                                         window_15x10):
+    game = kv_game
+    game.game_start(slots=[('keys', 0), ('touch', 'bottom'), ('pad', 0),
+                           ('keys', 1)])
+    w, h = window_15x10
+    one, _, three, four = game.statuses
+    assert [s.side for s in game.statuses] == [
+        'corner', 'bottom', 'corner', 'corner']
+    half = main.dp(main.CORNER_DP) / 2
+    assert tuple(one.ids.text_label.center) == pytest.approx((half, h - half))
+    assert tuple(three.ids.text_label.center) == pytest.approx((half, half))
+    assert tuple(four.ids.text_label.center) == pytest.approx((w - half, half))
+    assert one.ids.text_label.text == 'Lives 3\nPoints 0'
+
+
+@pytest.fixture
+def join4(kv_game, window_15x10, monkeypatch):
+    """The join screen of a big screen: a touch seat at every edge."""
+    monkeypatch.setattr(main, 'four_seat_screen', lambda *a: True)
+    join = _join(kv_game)
+    join.do_layout()
+    for child in join.children:
+        if hasattr(child, 'do_layout'):
+            child.do_layout()
+    return join
+
+
+def test_join_strip_labels_read_from_their_seat(join4):
+    angles = {side: strip._turn.angle
+              for side, strip in join4.side_buttons.items()}
+    assert angles == {'left': -90, 'right': 90, 'top': 180, 'bottom': 0}
+    top = join4.side_buttons['top']
+    assert top._label.width > top._label.height      # runs along the strip
+    left = join4.side_buttons['left']
+    assert left._label.width > left._label.height    # turned a quarter
+
+
+def test_four_join_strips_are_at_the_screen_edges(join4, window_15x10):
+    w, h = window_15x10
+    strips = join4.side_buttons
+    assert set(strips) == {'left', 'right', 'top', 'bottom'}
+    left, right, top, bottom = (strips[s] for s in
+                                ('left', 'right', 'top', 'bottom'))
+    assert left.x < main.dp(10) and right.right > w - main.dp(10)
+    assert top.top > h - main.dp(10) and bottom.y < main.dp(10)
+    assert left.height == join4.height and top.width > top.height
+    # top and bottom between the side strips, the panels in the middle
+    assert left.right < top.x and top.right < right.x
+    middle = join4.panels[0]['panel'].parent.parent  # panels + Back row
+    middle.parent.do_layout()
+    assert bottom.top < middle.y and middle.top < top.y
+    assert left.right < middle.x and middle.right < right.x
+    assert 'tap an edge' in join4.panels[0]['empty'].text
+
+
+def test_four_players_join_by_touch_and_start(join4):
+    game = join4.parent
+    for side in ('top', 'left', 'bottom', 'right'):
+        join4.side_buttons[side].dispatch('on_press')
+    assert join4.slots == [('touch', 'top'), ('touch', 'left'),
+                           ('touch', 'bottom'), ('touch', 'right')]
+    assert join4.panels[0]['device'].text == 'Touch · top side'
+    assert join4.panels[2]['device'].text == 'Touch · bottom side'
+    for strip in join4.side_buttons.values():
+        assert strip.disabled and strip.text.endswith('· touch')
+    assert join4.join_touch('top') is None
+    for slot in range(4):
+        join4.toggle_ready(slot)
+    assert not game.select_active
+    assert [c.touch_buttons.side for c in game.controls] == [
+        'top', 'left', 'bottom', 'right']
+    assert all(c.touch_buttons.edges and c.touch_buttons.active
+               for c in game.controls)
+
+
+def test_four_join_strips_hidden_without_touchscreen(kv_game, monkeypatch):
+    monkeypatch.setattr(main, 'four_seat_screen', lambda *a: True)
+    game = kv_game
+    game.ship_colors.path = None
+    game.has_touch = False
+    game.show_ship_select(2)
+    join = game.select
+    assert len(join.side_buttons) == 4
+    for strip in join.side_buttons.values():
+        assert strip.opacity == 0 and strip.disabled
+    game._on_window_touch(None, None)
+    for strip in join.side_buttons.values():
+        assert strip.opacity == 1 and not strip.disabled
+    join.side_buttons['bottom'].dispatch('on_press')
+    assert join.slots[0] == ('touch', 'bottom')
+
+
+def test_phone_join_screen_keeps_two_strips(kv_game):
+    join = _join(kv_game)
+    assert set(join.side_buttons) == {'left', 'right'}
+    assert 'tap a side' in join.panels[0]['empty'].text
+    assert join.join_touch('top') is None and join.joined == []

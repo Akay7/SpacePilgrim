@@ -60,31 +60,27 @@
 <SpaceshipStatus>:
     Label:
         id: text_label
-        # one player: top right. Multiplayer: a touch player's block is at
-        # the middle of their side, just inside their touch controls (the
-        # turned text is one line high across), turned so that it reads
-        # right from their seat (the touch players sit at opposite sides:
-        # left one faces right, right one left); keyboard and gamepad players
-        # sit in front of the screen and get a column of the top row, in
-        # player order
-        center_x: root.inset + self.texture_size[1] / 2 if root.side == 'left' else (Window.width - root.inset - self.texture_size[1] / 2 if root.side == 'right' else (Window.width * (root.column + 0.5) / 4 if root.side == 'top' else Window.width - metrics.dp(210)))
-        center_y: Window.height / 2 if root.side in ('left', 'right') else Window.height - 50
+        # placed by SpaceshipStatus.label_center: one player top right; a
+        # touch player at the middle of their edge, just inside their touch
+        # controls, turned to read from their seat; keyboard and gamepad
+        # players in the top row or the corners, in player order
+        center: root.label_center(self.texture_size, Window.size, root.side, root.inset, root.column)
         canvas.before:
             PushMatrix
             Rotate:
-                angle: -90 if root.side == 'left' else (90 if root.side == 'right' else 0)
+                angle: root.angle_of(root.side)
                 origin: self.center
         canvas.after:
             PopMatrix
         color: root.color
-        text: ("Lives {}  Points {}" if root.side == 'top' else "Lives {:<5} Points {}").format(root.spaceship.lives, root.spaceship.points)
-        font_size: "17dp" if root.side == 'top' else "23dp"
+        text: ("Lives {}  Points {}" if root.side == 'row' else "Lives {}\nPoints {}" if root.side == 'corner' else "Lives {:<5} Points {}").format(root.spaceship.lives, root.spaceship.points)
+        font_size: "17dp" if root.side in ('row', 'corner') else "23dp"
         font_name: 'data/fonts/RobotoMono-Regular.ttf'
 
     PauseButton:
-        # under the lives and points as the player reads them: below the
-        # text for one player; for a touch player's turned text (middle of
-        # their side, between their two controls) on the screen-edge side
+        id: pause
+        # under the lives and points as the player reads them, see
+        # SpaceshipStatus.pause_center
         text: "Pause"
         font_size: "12dp"
         background_normal: ''
@@ -94,13 +90,12 @@
         size: metrics.dp(44), metrics.dp(44)
         opacity: 1 if root.show_menu else 0
         disabled: not root.show_menu
-        center_x: text_label.center_x if root.side == '' else (text_label.center_x - text_label.texture_size[1] / 2 - metrics.dp(28) if root.side == 'left' else text_label.center_x + text_label.texture_size[1] / 2 + metrics.dp(28))
-        center_y: text_label.center_y - text_label.texture_size[1] / 2 - metrics.dp(28) if root.side == '' else text_label.center_y
+        center: root.pause_center(text_label.center, text_label.texture_size, root.side)
         on_press: root.parent.pause()
         canvas.before:
             PushMatrix
             Rotate:
-                angle: -90 if root.side == 'left' else (90 if root.side == 'right' else 0)
+                angle: root.angle_of(root.side)
                 origin: self.center
             # same rounded blue outline as the join screen's side strips
             Color:
