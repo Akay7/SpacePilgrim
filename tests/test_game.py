@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 import main
@@ -23,6 +25,42 @@ def test_thrust_accelerates_and_drag_slows():
     ship.thrust_off()
     ship.update(0)
     assert ship.speed == pytest.approx(3 * 0.98)
+
+
+def test_engine_sound_plays_while_any_ship_thrusts():
+    one, two = Spaceship(), Spaceship()
+    one.thrust_on()
+    two.thrust_on()
+    two.thrust_off()
+    assert Spaceship.sound.state == 'play'
+    one.thrust_off()
+    assert Spaceship.sound.state == 'stop'
+
+
+def mixer_channels_playing():
+    # Kivy's own SDL_mixer (already loaded): how many sounds are heard
+    import ctypes
+    import glob
+    import kivy
+    lib = glob.glob(os.path.join(os.path.dirname(kivy.__file__),
+                                 '..', 'Kivy.libs', 'libSDL2_mixer*'))
+    if not lib:
+        pytest.skip('no bundled SDL2_mixer to ask')
+    return ctypes.CDLL(lib[0]).Mix_Playing(-1)
+
+
+def test_shots_and_explosions_overlap():
+    # two players fire (or blow up) at once: both sounds must be heard,
+    # the second must not cut the first off
+    Spaceship.sound.stop()
+    before = mixer_channels_playing()
+    Shot()
+    Shot()
+    assert mixer_channels_playing() == before + 2
+    explosions = [main.Explosion(), main.Explosion()]
+    assert mixer_channels_playing() == before + 4
+    for explosion in explosions:   # never added to a game to leave
+        explosion.pause()
 
 
 def test_rotation_controls():

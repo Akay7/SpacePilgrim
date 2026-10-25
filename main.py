@@ -1,12 +1,14 @@
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 import colorsys
 import json
 import math
 import os
+import sys
 from collections import namedtuple
 from functools import partial
 from random import randint, choice
+from weakref import WeakSet
 
 # Mix every sound in-app with SDL2_mixer. Kivy's Android default gives each
 # sound its own MediaPlayer, and some Android TV devices let only one of them
@@ -15,6 +17,15 @@ from random import randint, choice
 os.environ.setdefault('KIVY_AUDIO', 'sdl2')
 
 from kivy.utils import platform
+
+if platform == 'android':
+    # Kivy's clock asks ctypes.util for libc to sleep with usleep, and
+    # python-for-android answers that with Java reflection (3 s on a slow
+    # TV). With the lookup failing, the clock falls back to time.sleep.
+    sys.modules['ctypes.util'] = None
+    import kivy.clock  # noqa: F401
+    del sys.modules['ctypes.util']
+
 from kivy.animation import Animation
 from kivy.core.window import Window, Keyboard
 from kivy.core.audio import SoundLoader
@@ -515,10 +526,58 @@ class Leaderboard:
         return True
 
 
+_java_declared = False
+
+
+def declare_java_classes():
+    """Android: declare the few Java methods the game calls.
+
+    pyjnius's autoclass reflects every method of a class and of all its
+    parents, and does that again for the declared type of each object a
+    call returns. getDecorView() returns a View, thousands of methods: that
+    took 24 s on a slow TV, blocking its UI thread (no input, no frames).
+    autoclass and returned objects use a class declared here instead.
+
+    That holds for every caller, Kivy and python-for-android too, so only
+    types they do not call into at run time are declared here."""
+    global _java_declared
+    if _java_declared:
+        return
+    from jnius import JavaClass, MetaJavaClass, JavaMethod, JavaStaticMethod
+    from android import api_version
+
+    class PackageManager(JavaClass, metaclass=MetaJavaClass):
+        __javaclass__ = 'android/content/pm/PackageManager'
+        hasSystemFeature = JavaMethod('(Ljava/lang/String;)Z')
+
+    class Window(JavaClass, metaclass=MetaJavaClass):
+        __javaclass__ = 'android/view/Window'
+        getDecorView = JavaMethod('()Landroid/view/View;')
+        getInsetsController = JavaMethod(
+            '()Landroid/view/WindowInsetsController;')
+
+    class View(JavaClass, metaclass=MetaJavaClass):
+        __javaclass__ = 'android/view/View'
+        setSystemUiVisibility = JavaMethod('(I)V')
+
+    if api_version >= 30:   # a class missing on older Android would raise
+        class WindowInsetsController(JavaClass, metaclass=MetaJavaClass):
+            __javaclass__ = 'android/view/WindowInsetsController'
+            hide = JavaMethod('(I)V')
+            setSystemBarsBehavior = JavaMethod('(I)V')
+
+        class WindowInsetsType(JavaClass, metaclass=MetaJavaClass):
+            __javaclass__ = 'android/view/WindowInsets$Type'
+            systemBars = JavaStaticMethod('()I')
+
+    _java_declared = True
+
+
 def is_android_tv():
     if platform != 'android':
         return False
     try:
+        declare_java_classes()
         from jnius import autoclass
         activity = autoclass('org.kivy.android.PythonActivity').mActivity
         package_manager = activity.getPackageManager()
@@ -536,6 +595,7 @@ def hide_system_bars():
     if platform != 'android':
         return
     try:
+        declare_java_classes()
         from jnius import autoclass
         from android.runnable import run_on_ui_thread
 
@@ -612,6 +672,7 @@ def has_touchscreen():
     if platform != 'android':
         return True
     try:
+        declare_java_classes()
         from jnius import autoclass
         activity = autoclass('org.kivy.android.PythonActivity').mActivity
         return bool(activity.getPackageManager().hasSystemFeature(
@@ -655,10 +716,27 @@ def touch_seats():
     return FOUR_SEATS if four_seat_screen() else TOUCH_SIDES
 
 
+class SoundPool:
+    """A few copies of one sound effect, so that it can overlap itself.
+    A Kivy Sound restarts when played again, which cuts off the previous
+    shot or explosion (another player's, too). Copies are used in turn;
+    together with the engine they stay within SDL_mixer's 8 channels."""
+
+    def __init__(self, source, copies):
+        self.sounds = [SoundLoader.load(source) for _ in range(copies)]
+        if None in self.sounds:
+            raise IOError('can not load sound %s' % source)
+        self.next = 0
+
+    def play(self):
+        self.sounds[self.next].play()
+        self.next = (self.next + 1) % len(self.sounds)
+
+
 class Explosion(Widget):
     frame = NumericProperty(0)
     texture = ObjectProperty()
-    sound = SoundLoader.load('sounds/explosion.ogg')
+    sound = SoundPool('sounds/explosion.ogg', 3)
 
     def __init__(self, **kwargs):
         super(Explosion, self).__init__(**kwargs)
@@ -708,7 +786,7 @@ class Shot(Widget):
     lifetime = NumericProperty(1)
     speed = NumericProperty(4)
     angle = NumericProperty(0)
-    sound = SoundLoader.load('sounds/gun.ogg')
+    sound = SoundPool('sounds/gun.ogg', 4)   # one per player
     spaceship = ObjectProperty()
 
     def __init__(self, **kwargs):
@@ -737,6 +815,10 @@ class Spaceship(Widget):
     texture_stop = ObjectProperty(None, allownone=True)
     texture_fly = ObjectProperty(None, allownone=True)
     sound = SoundLoader.load('sounds/engine.ogg')
+    sound.loop = True   # thrust is often held longer than the 13 s sample
+    # All ships share the one engine sound: it plays while any of them
+    # thrusts, so one player letting go must not silence the others.
+    thrusting = WeakSet()
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -763,13 +845,16 @@ class Spaceship(Widget):
         self.pos = Vector(self.speed, 0).rotate(self.angle) + self.pos
 
     def thrust_on(self):
-        if not self.thrust:
+        if not Spaceship.thrusting:
             self.sound.play()
+        Spaceship.thrusting.add(self)
         self.thrust = True
 
     def thrust_off(self):
         self.thrust = False
-        self.sound.stop()
+        Spaceship.thrusting.discard(self)
+        if not Spaceship.thrusting:
+            self.sound.stop()
 
     def turn_left(self):
         self.angle_rotation = 3

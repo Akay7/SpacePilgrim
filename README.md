@@ -186,6 +186,16 @@ buildozer android release
 
 - with a player at the top or bottom edge, every player has their joystick and FIRE the same distance apart around the middle of their edge, as far apart as the screen allows (the players at the short edges keep them in the corners), and the controls shrink together when the screen is tight; keyboard and gamepad players' lives and points then move to the screen corners
 
+### 0.4.1
+
+- Android / Android TV: all sounds are mixed in the game (SDL2 mixer), so the engine, shots and explosions are heard together; on some TVs only one of them was heard at a time
+
+- multiplayer: the engine sound plays while any ship thrusts, so one player letting go no longer silences the others, and it keeps playing when thrust is held longer than the 13 s sample
+
+- shots and explosions of several players overlap instead of cutting each other off
+
+- Android: faster start (about 2 s less on a slow TV), and no more freeze of up to 24 s right after the menu appears on slow devices, when the game ignored the remote and gamepads and the screen stopped updating
+
 ## Copyright and License
 
 Copyright 2016 - 2017, 2024, 2026 Egor Poderiagin.
