@@ -18,11 +18,15 @@ The game SHALL ship with two default keyboard sets, so that at most two players 
 - **THEN** that player's ship thrusts
 
 ### Requirement: Settings screen access
-The main menu "Settings" button SHALL be enabled and SHALL open a settings screen offering "Keyboard layout" and "Touch controls". "Keyboard layout" SHALL open a screen listing thrust, turn left, turn right and fire with their currently bound keys. Each settings screen SHALL provide a way to go back: from the keyboard layout to the settings screen, and from the settings screen to the main menu.
+The main menu "Settings" button SHALL be enabled and SHALL open a settings screen offering "Keyboard layout", "Gamepad buttons" and "Touch controls". "Keyboard layout" SHALL open a screen listing thrust, turn left, turn right and fire with their currently bound keys. "Gamepad buttons" SHALL open the gamepad bindings page (see gamepad-bindings). Each settings screen SHALL provide a way to go back: from the keyboard layout and the gamepad buttons page to the settings screen, and from the settings screen to the main menu.
 
 #### Scenario: Open and close settings
 - **WHEN** the player activates "Settings" in the main menu, then "Keyboard layout", then "Back" twice
 - **THEN** the settings screen, the keyboard layout screen, the settings screen and finally the main menu are shown in turn
+
+#### Scenario: Open gamepad buttons
+- **WHEN** the player activates "Settings" in the main menu, then "Gamepad buttons", then "Back" twice
+- **THEN** the settings screen, the gamepad buttons page, the settings screen and finally the main menu are shown in turn
 
 ### Requirement: Rebind an action
 The user SHALL be able to select an action of a chosen keyboard set on the settings screen and press a key to bind it. The new key SHALL replace all keys previously bound to that action of that set and take effect immediately, including in the game started afterwards. Bindings of the other set SHALL be unchanged.

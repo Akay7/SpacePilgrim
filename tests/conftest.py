@@ -26,3 +26,20 @@ def two_touch_seats(monkeypatch):
     dpi of the machine; tests of four seats patch this back."""
     import main
     monkeypatch.setattr(main, 'four_seat_screen', lambda *a, **k: False)
+
+
+@pytest.fixture(autouse=True)
+def no_real_gamepads(monkeypatch):
+    """Games ask SDL which gamepads exist (this machine may have some, or a
+    keyboard that calls itself one); tests use the unidentified default or
+    their own FakePads."""
+    import main
+    monkeypatch.setattr(main, 'make_pad_identity',
+                        lambda: main.PadIdentity(None))
+
+
+@pytest.fixture(autouse=True)
+def no_pad_watcher(monkeypatch):
+    """Games do not poll the machine's real joysticks."""
+    import main
+    monkeypatch.setattr(main, 'watch_gamepads', lambda: None)

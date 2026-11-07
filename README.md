@@ -22,19 +22,18 @@ You have two choices:
 
 ### ToDo
 
-1. Gamepad button remapping.
-2. Allow multiplayer game on multiple devices.
-3. Ship on Android TV: emulator and real device testing remains (see below).
+1. Allow multiplayer game on multiple devices.
+2. Ship on Android TV: HUD size check and Play Console steps remain (see below).
 
 #### Android TV
 
-The game runs on Android TV (TV launcher entry and banner, optional touchscreen / gamepad, menus and game playable with the D-pad or a gamepad). Still to do:
+The game runs on Android TV (TV launcher entry and banner, optional touchscreen / gamepad, menus and game playable with the D-pad or a gamepad), tested on the emulator and a real device. Still to do:
 
 - [ ] Check HUD and object sizes on 1080p and 4K TV emulators.
-- [ ] Test on the Android Studio "Android TV (1080p)" emulator (done: launches from the TV launcher, menu/settings navigable with the remote, Back returns to the menu) and a real device (Chromecast with Google TV, Nvidia Shield).
+- [x] Test on the Android Studio "Android TV (1080p)" emulator (launches from the TV launcher, menu/settings navigable with the remote, Back returns to the menu) and a real device.
 - [ ] Play Console: opt in to the Android TV form factor, upload the 1920x1080 TV screenshots from `store/play/tv/` and the 1280x720 TV banner `store/play/tv-banner.png` (see [Google Play listing images](#google-play-listing-images)); the app must be fully playable with D-pad / gamepad only.
 
-To verify a build (manifest verified with `aapt2 dump badging`; emulator/device testing still to do):
+To verify a build (manifest verified with `aapt2 dump badging`):
 
 1. `buildozer android debug`, then check `.buildozer/android/platform/build-*/dists/spacepilgrim/src/main/AndroidManifest.xml` for the `LEANBACK_LAUNCHER` filter, `android:banner` and the three `uses-feature` entries.
 2. Create an "Android TV (1080p)" AVD (and a 4K one), `adb install bin/*.apk`, and play using only the emulator remote.
@@ -44,11 +43,11 @@ To verify a build (manifest verified with `aapt2 dump badging`; emulator/device 
 | Action | Keyboard | Gamepad | Touch |
 |---|---|---|---|
 | Turn | Left / Right or A / D | Left stick or D-pad | Stick left / right |
-| Thrust | Up or W | Stick up, D-pad up, B / Y | Stick up |
-| Fire | Space or Enter | A / X | FIRE button |
+| Thrust | Up or W | Stick up (power follows the push), D-pad up, B / Y, or a trigger (variable power) | Stick up (power follows the push) |
+| Fire | Space or Enter | A / X (rebindable) | FIRE button |
 | Pause | Escape / Back | Back / Start | Pause button |
 
-Android TV remote D-pad arrives as arrow keys, centre button fires.
+Android TV remote D-pad arrives as arrow keys, centre button fires. The gamepad buttons for thrust and fire are the defaults and can be changed per gamepad (see below).
 
 ### Multiplayer
 
@@ -69,13 +68,17 @@ In the game each device drives only the ship it joined with; devices that did no
 
 Both keyboard sets work at the same time (very cheap keyboards may not report six held keys at once; the keys are rebindable). In a single-player game any keyboard set and any gamepad drives the ship.
 
-Touch controls are a joystick overlay (draggable stick bottom-left: up thrusts, left / right turn, in-between positions combine them; square red FIRE button bottom-right). They appear on any device as soon as the screen is touched and hide again when a keyboard key or gamepad input is used, so keyboard, gamepad and touch can be mixed freely. **Settings > Touch controls** switches between Auto (default), On (always shown) and Off, and sets the size of the controls with a slider (50-400%, left / right keys also work; applied to the next game and limited to what fits on screen); the choices are saved in `touch_ui.json` in the app's user data directory.
+Touch controls are a joystick overlay (draggable stick bottom-left: up thrusts, harder the further up the knob is, left / right turn, in-between positions combine them; square red FIRE button bottom-right). They appear on any device as soon as the screen is touched and hide again when a keyboard key or gamepad input is used, so keyboard, gamepad and touch can be mixed freely. **Settings > Touch controls** switches between Auto (default), On (always shown) and Off, and sets the size of the controls with a slider (50-400%, left / right keys also work; applied to the next game and limited to what fits on screen); the choices are saved in `touch_ui.json` in the app's user data directory.
 
 Keyboard keys for thrust, turn left, turn right and fire can be changed in **Settings > Keyboard layout** in the main menu: pick an action, then press the new key (Escape cancels). The *Keys of: Set* button switches between keyboard set 1 (defaults W / A / D / Space) and set 2 (I / J / L / K); **Reset to defaults** restores both. Arrow keys, Enter and Escape are fixed (arrows and Enter always count as set 1) so the menus always stay reachable, and a key already used by any action of either set is refused. Bindings of both sets are saved in `keybindings.json` (physical keys, so they work on any keyboard layout; files from versions with one set are read as set 1) in the app's user data directory.
 
+The gamepad buttons for thrust and fire can be changed in **Settings > Gamepad buttons**: the first entry chooses the gamepad to edit (the connected pads, by name), then pick *Thrust* or *Fire* and press the new button on that pad (Back / Start or Escape cancels); the new button replaces the old ones (the defaults are A / X for fire and B / Y for thrust). Every gamepad model has its own layout, found again after a restart or reconnect by the pad's name and GUID, so two different pads in one multiplayer game can have different buttons; two pads of the same model share one layout. A pad that cannot be identified uses the defaults and its changes last for the session only.
+
+*Thrust* takes a trigger as well as a button: select it, then press a button or pull a trigger of the pad (any axis except the left stick; it works whether the trigger rests at -1 or 0), whichever you use is bound. A trigger is then the pad's thrust (its thrust buttons do nothing) and the more you pull, the faster the ship flies; binding a button to Thrust again replaces the trigger. The left stick, D-pad and Back / Start are fixed, and a button already used by the other action is refused. The layouts apply only while a game runs: menus, the join screen, popups and settings always use the standard buttons (A / X confirm, B / Y move up), so remapping never changes how you navigate. **Reset to defaults** resets only the chosen pad. The layouts are saved in `gamepad_buttons.json` in the app's user data directory.
+
 ### Pause
 
-In a game, Escape / Back (or a gamepad's Back / Start) pauses; touch players also have a **Pause** button under their lives and points. It freezes the whole game (ships, asteroids, shots, explosions, the scrolling background, the clock) behind a dimmed pause screen with **Continue** and **Main menu**; the pause screen also works with the keyboard and gamepads, and Back / Escape on it continues. **Main menu** leaves the game without the results screen.
+In a game, Escape / Back (or a gamepad's Back / Start) pauses; touch players also have a **Pause** button under their lives and points (it goes away once their ship is lost). It freezes the whole game (ships, asteroids, shots, explosions, the scrolling background, the clock) behind a dimmed pause screen with **Continue** and **Main menu**; the pause screen also works with the keyboard and gamepads, and Back / Escape on it continues. **Main menu** leaves the game without the results screen.
 
 ### Game over and leaderboard
 
@@ -195,6 +198,18 @@ buildozer android release
 - shots and explosions of several players overlap instead of cutting each other off
 
 - Android: faster start (about 2 s less on a slow TV), and no more freeze of up to 24 s right after the menu appears on slow devices, when the game ignored the remote and gamepads and the screen stopped updating
+
+### 0.5.0
+
+- Settings > Gamepad buttons: choose which buttons thrust and fire, separately for every gamepad model (found again by name and GUID), saved in `gamepad_buttons.json`; Back / Start, the left stick and the D-pad stay fixed, and menus, popups and settings keep the standard buttons (A / X confirm, B / Y up) whatever the layout
+
+- Thrust takes a button or a trigger through the same entry: a trigger thrusts with power that follows how far it is pulled, and a button replaces it again
+
+- multiplayer: a touch player's Pause button disappears once their ship is lost (their lives and points stay)
+
+- thrust power on the sticks: pushing the on-screen joystick or the gamepad's left stick up thrusts harder the further it goes (D-pad, thrust buttons and keys stay full power)
+
+- desktop: a gamepad that is switched on or plugged in again while the game runs is picked up (it was only opened at start-up before); Android already did this
 
 ## Copyright and License
 

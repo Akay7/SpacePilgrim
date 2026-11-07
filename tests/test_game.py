@@ -1,3 +1,4 @@
+import json
 import os
 
 import pytest
@@ -480,6 +481,7 @@ def _open_keyboard(game):
 
 def _open_touch(game):
     _open_settings(game)
+    _press(game, 274)                    # down to "Gamepad buttons"
     _press(game, 274)                    # down to "Touch controls"
     _press(game, KEY_ENTER)
     assert isinstance(game.settings, main.TouchSettingsScreen)
@@ -491,7 +493,7 @@ def test_settings_hub_and_back(kv_game):
     _open_settings(game)
     assert game.menu not in game.children
     assert [b.text for b in game.settings.buttons] == [
-        'Keyboard layout', 'Touch controls', 'Back']
+        'Keyboard layout', 'Gamepad buttons', 'Touch controls', 'Back']
     game._on_key_down(None, KEY_ESC)    # Escape goes back to the menu
     assert not game.settings_active
     assert game.menu in game.children
@@ -1771,7 +1773,42 @@ def test_pad_watcher_closes_gone_pads_and_reopens_them():
     assert sdl.opened == [3, 4]
 
 
-def test_pad_watcher_is_off_outside_android():
+def test_pad_watcher_runs_on_every_platform(monkeypatch):
+    # a pad unplugged and plugged in again on the desktop must come back too
+    sdl = _fake_sdl()
+    scheduled = []
+    monkeypatch.setattr(
+        main.Clock, 'schedule_interval',
+        lambda callback, interval: scheduled.append((callback, interval))
+        or 'event')
+    assert main.start_pad_watcher(sdl) == 'event'
+    (poll, interval), = scheduled
+    assert interval == 0.25
+    sdl.devices.append(5)            # plugged in again
+    poll(0.25)
+    assert sdl.opened == [5]
+
+
+def test_pad_watcher_survives_garbage_collection():
+    # the Clock keeps bound methods weakly: the watcher must be kept alive
+    import gc
+    sdl = _fake_sdl()
+    event = main.start_pad_watcher(sdl)
+    try:
+        gc.collect()
+        callback = event.get_callback()
+        assert callback is not None
+        sdl.devices.append(6)
+        callback(0.25)
+        assert sdl.opened == [6]
+    finally:
+        event.cancel()
+
+
+def test_pad_watcher_needs_sdl(monkeypatch):
+    assert main.start_pad_watcher(object()) is None   # not an SDL: no watcher
+    monkeypatch.undo()
+    monkeypatch.setattr(main, 'load_sdl', lambda: None)
     assert main.watch_gamepads() is None
 
 
@@ -2025,6 +2062,23 @@ def test_touch_players_get_a_pause_button(kv_game):
     assert not any(s.show_menu for s in game.statuses)
     game.resume()
     assert all(s.show_menu for s in game.statuses)
+
+
+def test_pause_button_goes_away_with_its_dead_player(kv_game):
+    game = kv_game
+    game.game_start(slots=[('touch', 'left'), ('touch', 'right'),
+                           ('keys', 0), None])
+    game.update(0)
+    dead, alive = game.spaceships[0], game.spaceships[1]
+    status = {s.spaceship: s for s in game.statuses}
+    assert status[dead].show_menu and status[alive].show_menu
+    dead.lives = 0
+    game.lose_spaceship(dead)
+    assert not status[dead].show_menu          # the block stays, the button goes
+    assert status[alive].show_menu
+    game.pause()
+    game.resume()
+    assert not status[dead].show_menu and status[alive].show_menu
 
 
 def _name_entry(game, tmp_path):
@@ -2628,3 +2682,923 @@ def test_phone_join_screen_keeps_two_strips(kv_game):
     assert set(join.side_buttons) == {'left', 'right'}
     assert 'tap a side' in join.panels[0]['empty'].text
     assert join.join_touch('top') is None and join.joined == []
+
+
+# ---- gamepad button maps, per pad ------------------------------------------
+
+class FakePads(main.PadIdentity):
+    """Pads known to the game: stick id -> (identity, name, axis values)."""
+
+    def __init__(self, pads):
+        super().__init__(None)
+        self.pads = pads
+
+    def _devices(self):
+        return [(stick, ident, name)
+                for stick, (ident, name, _) in self.pads.items()]
+
+    def _axis_values(self, instance):
+        return dict(self.pads[instance][2])
+
+
+PAD_X = ('guid-x|Pad X', 'Pad X')
+PAD_Z = ('guid-z|Pad Z', 'Pad Z')
+
+
+def fake_pads(**sticks):
+    """fake_pads(s7=(PAD_X, {axes})) style helper: {stick: spec}."""
+    return FakePads({int(k[1:]): (v[0][0], v[0][1], v[1])
+                     for k, v in sticks.items()})
+
+
+def test_joy_button_tables_split_default_and_fixed():
+    android = main.JOY_BUTTON_ACTIONS_ANDROID
+    desktop = main.JOY_BUTTON_ACTIONS_DESKTOP
+    assert main.JOY_DEFAULT_BUTTONS == {'fire': [0, 2], 'up': [1, 3]}
+    assert main.JOY_FIXED_ACTIONS_DESKTOP == {6: 'back', 7: 'back'}
+    assert set(main.JOY_FIXED_ACTIONS_ANDROID) == {4, 6, 11, 12, 13, 14}
+    assert desktop == {0: 'fire', 2: 'fire', 1: 'up', 3: 'up',
+                       6: 'back', 7: 'back'}
+    assert android[0] == 'fire' and android[13] == 'left'
+    assert main.JOY_BUTTON_ACTIONS in (android, desktop)
+    assert main.JOY_FIXED_ACTIONS in (main.JOY_FIXED_ACTIONS_ANDROID,
+                                      main.JOY_FIXED_ACTIONS_DESKTOP)
+
+
+def test_pad_button_names():
+    assert [main.pad_button_name(b) for b in (0, 1, 2, 3)] == list('ABXY')
+    assert main.pad_button_name(9) == 'Button 9'
+
+
+def test_pad_identity_without_sdl_knows_nothing():
+    pads = main.PadIdentity(None)
+    assert pads.identity(0) is None
+    assert pads.connected() == []
+    assert pads.axes('anything') == {}
+
+
+def test_pad_identity_answers_from_devices():
+    pads = fake_pads(s7=(PAD_X, {4: -1.0}), s3=(PAD_Z, {}),
+                     s8=(PAD_X, {4: 0.0}))
+    assert pads.identity(7) == PAD_X
+    assert pads.identity(3) == PAD_Z
+    assert pads.identity(99) is None
+    # one entry per model, in connection order
+    assert pads.connected() == [PAD_X, PAD_Z]
+    assert pads.axes(PAD_X[0]) == {4: -1.0}
+    assert pads.axes('nope') == {}
+
+
+def test_pad_identity_survives_a_broken_sdl():
+    class Broken:
+        def __getattr__(self, name):
+            raise AttributeError(name)
+
+    assert main.PadIdentity(Broken()).sdl is None
+
+    pads = main.PadIdentity(None)
+    pads.sdl = object()           # calls fail: nothing is known
+    assert pads.connected() == []
+    assert pads._axis_values(0) == {}
+
+
+def test_pad_identity_on_the_real_sdl_does_not_crash():
+    pads = main.PadIdentity(main.load_sdl())
+    assert isinstance(pads.connected(), list)
+    assert pads.identity(-12345) is None
+    assert pads.axes('no such pad') == {}
+
+
+def test_gamepad_defaults():
+    pads = main.GamepadBindings()
+    for button, action in {0: 'fire', 2: 'fire', 1: 'up', 3: 'up'}.items():
+        assert pads.action_for('x', button) == action
+    assert pads.action_for('x', 5) is None
+    assert pads.label('x', 'fire') == 'A, X'
+    assert pads.label('x', 'up') == 'B, Y'
+
+
+def test_gamepad_back_and_dpad_are_fixed_for_every_pad():
+    pads = main.GamepadBindings()
+    for button, action in main.JOY_FIXED_ACTIONS.items():
+        assert pads.action_for('x', button) == action
+        assert pads.rebind('x', 'fire', button) == 'That button is reserved'
+    assert pads.label('x', 'fire') == 'A, X'
+
+
+def test_gamepad_rebind_replaces_the_old_buttons():
+    pads = main.GamepadBindings()
+    assert pads.rebind('x', 'fire', 9) is None
+    assert pads.label('x', 'fire') == 'Button 9'
+    assert pads.action_for('x', 9) == 'fire'
+    assert pads.action_for('x', 0) is None and pads.action_for('x', 2) is None
+    assert pads.action_for('x', 1) == 'up'
+
+
+def test_gamepad_rebind_refuses_a_button_of_the_other_action():
+    pads = main.GamepadBindings()
+    assert pads.rebind('x', 'fire', 1) == 'Already used for Thrust'
+    assert pads.rebind('x', 'up', 0) == 'Already used for Fire'
+    assert pads.label('x', 'fire') == 'A, X'
+    assert pads.rebind('x', 'fire', 0) is None        # its own button
+    assert pads.rebind('x', 'fire', True) == 'That button can not be used'
+
+
+def test_gamepad_layouts_are_per_pad():
+    pads = main.GamepadBindings()
+    pads.rebind('x', 'fire', 3 + 6)
+    assert pads.action_for('z', 0) == 'fire'
+    assert pads.action_for('x', 0) is None
+    # the same button may mean something else on another pad
+    assert pads.rebind('z', 'up', 9) is None
+    assert pads.action_for('z', 9) == 'up' and pads.action_for('x', 9) == 'fire'
+
+
+def test_gamepad_trigger_replaces_the_thrust_buttons():
+    pads = main.GamepadBindings()
+    assert pads.bind_trigger('x', 5, -1.0, 1.0) is None
+    assert pads.label('x', 'up') == 'trigger (axis 5)'
+    assert pads.action_for('x', 1) is None and pads.action_for('x', 3) is None
+    assert pads.action_for('x', 0) == 'fire'
+    assert pads.action_for('z', 1) == 'up'            # other pads unchanged
+
+
+def test_binding_a_thrust_button_replaces_the_trigger():
+    pads = main.GamepadBindings()
+    pads.bind_trigger('x', 5, -1.0, 1.0)
+    assert pads.rebind('x', 'up', 9) is None
+    assert pads.label('x', 'up') == 'Button 9'
+    assert pads.profile('x')['trigger'] is None
+    assert pads.action_for('x', 9) == 'up' and pads.action_for('x', 1) is None
+    pads.bind_trigger('x', 5, -1.0, 1.0)
+    assert pads.rebind('x', 'fire', 9) is None        # the trigger frees it
+    assert pads.rebind('x', 'up', 9) == 'Already used for Fire'
+
+
+def test_buttons_of_a_pad_thrusting_by_trigger_are_free_for_fire():
+    pads = main.GamepadBindings()
+    pads.bind_trigger('x', 5, -1.0, 1.0)
+    assert pads.rebind('x', 'fire', 1) is None        # was a thrust button
+    assert pads.action_for('x', 1) == 'fire'
+
+
+def test_gamepad_trigger_refuses_the_stick():
+    pads = main.GamepadBindings()
+    for axis in (0, 1):
+        assert pads.bind_trigger('x', axis, 0.0, 1.0) == 'The stick is reserved'
+    assert pads.bind_trigger('x', 4, 0.5, 0.5) == 'That axis can not be used'
+    assert pads.label('x', 'up') == 'B, Y'
+
+
+def test_gamepad_reset_is_per_pad():
+    pads = main.GamepadBindings()
+    for ident in ('x', 'z'):
+        pads.rebind(ident, 'fire', 9)
+        pads.bind_trigger(ident, 5, 0.0, 1.0)
+    pads.reset('x')
+    assert pads.label('x', 'fire') == 'A, X' and pads.label('x', 'up') == 'B, Y'
+    assert pads.label('z', 'fire') == 'Button 9'
+    assert pads.label('z', 'up') == 'trigger (axis 5)'
+
+
+def test_trigger_level_follows_the_pull():
+    rest_low = {'axis': 5, 'rest': -1.0, 'full': 1.0}
+    rest_zero = {'axis': 5, 'rest': 0.0, 'full': 1.0}
+    inverted = {'axis': 5, 'rest': 0.0, 'full': -1.0}
+    for trigger, rest, half, full in (
+            (rest_low, -1.0, 0.0, 1.0), (rest_zero, 0.0, 0.5, 1.0),
+            (inverted, 0.0, -0.5, -1.0)):
+        assert main.trigger_level(trigger, rest) == 0
+        assert main.trigger_level(trigger, full) == pytest.approx(1)
+        assert 0.4 < main.trigger_level(trigger, half) < 0.6
+    assert main.trigger_level(rest_zero, 0.05) == 0          # dead zone
+    assert main.trigger_level(rest_zero, -0.5) == 0          # wrong way
+    assert main.trigger_level(rest_zero, 5.0) == pytest.approx(1)  # clamped
+    assert (main.trigger_level(rest_zero, 0.3)
+            < main.trigger_level(rest_zero, 0.6))
+
+
+def test_gamepad_bindings_persist(tmp_path):
+    path = str(tmp_path / 'sub' / 'pads.json')
+    pads = main.GamepadBindings(path)
+    pads.rebind('x', 'up', 9)
+    pads.bind_trigger('x', 5, -1.0, 1.0)
+    pads.rebind('z', 'fire', 8)
+    again = main.GamepadBindings(path)
+    assert again.profile('x')['buttons']['up'] == [9]
+    assert again.action_for('x', 9) is None       # the trigger thrusts now
+    assert again.label('x', 'up') == 'trigger (axis 5)'
+    assert again.profile('x')['trigger'] == {'axis': 5, 'rest': -1.0, 'full': 1.0}
+    assert again.action_for('z', 8) == 'fire'
+    assert again.action_for('q', 0) == 'fire'                # unknown pad
+    again.reset('x')
+    assert main.GamepadBindings(path).label('x', 'up') == 'B, Y'
+    assert main.GamepadBindings(path).label('z', 'fire') == 'Button 8'
+
+
+def test_unidentified_pad_uses_defaults_and_is_not_saved(tmp_path):
+    path = tmp_path / 'pads.json'
+    pads = main.GamepadBindings(str(path))
+    assert pads.rebind(None, 'fire', 9) is None
+    assert pads.action_for(None, 9) == 'fire'
+    assert pads.action_for(None, 0) is None
+    assert pads.pads == {}
+    assert main.GamepadBindings(str(path)).action_for(None, 0) == 'fire'
+    pads.reset(None)
+    assert pads.action_for(None, 0) == 'fire'
+
+
+GOOD = {'buttons': {'up': [1, 3], 'fire': [0, 2]}, 'trigger': None}
+
+
+@pytest.mark.parametrize('profile', [
+    {'buttons': {'up': [1]}, 'trigger': None},                       # no fire
+    {'buttons': {'up': [1], 'fire': [1]}, 'trigger': None},          # twice
+    {'buttons': {'up': [], 'fire': [0]}, 'trigger': None},           # empty
+    {'buttons': {'up': [True], 'fire': [0]}, 'trigger': None},       # bool
+    {'buttons': {'up': ['1'], 'fire': [0]}, 'trigger': None},        # not int
+    {'buttons': {'up': [1], 'fire': [6, 7]}, 'trigger': None} if main.platform != 'android'
+    else {'buttons': {'up': [1], 'fire': [4]}, 'trigger': None},     # reserved
+    {'buttons': {'up': [1], 'fire': [0], 'jump': [4]}, 'trigger': None},
+    {'buttons': {'up': [1], 'fire': [0]},
+     'trigger': {'axis': 0, 'rest': 0, 'full': 1}},                  # stick
+    {'buttons': {'up': [1], 'fire': [0]},
+     'trigger': {'axis': 5, 'rest': 1, 'full': 1}},                  # no travel
+    {'buttons': {'up': [1], 'fire': [0]},
+     'trigger': {'axis': 5, 'rest': 'a', 'full': 1}},                # text
+    {'buttons': {'up': [1], 'fire': [0]}, 'trigger': 'axis 5'},
+    'not a profile',
+])
+def test_invalid_gamepad_profile_is_dropped_the_rest_is_kept(tmp_path, profile):
+    path = tmp_path / 'pads.json'
+    path.write_text(json.dumps({
+        'version': 1,
+        'pads': {'bad': profile,
+                 'good': {'buttons': {'up': [5], 'fire': [6 + 4]},
+                          'trigger': None}}}))
+    pads = main.GamepadBindings(str(path))
+    assert 'bad' not in pads.pads
+    assert pads.action_for('bad', 0) == 'fire'               # defaults
+    assert pads.action_for('good', 5) == 'up'
+    assert pads.action_for('good', 10) == 'fire'
+
+
+@pytest.mark.parametrize('content', [
+    '{broken', '[]', '"x"', '{"version": 2, "pads": {}}', '{"version": 1}',
+    '{"version": 1, "pads": []}', ''])
+def test_corrupt_gamepad_file_means_defaults(tmp_path, content):
+    path = tmp_path / 'pads.json'
+    path.write_text(content)
+    pads = main.GamepadBindings(str(path))
+    assert pads.pads == {}
+    assert pads.action_for('x', 0) == 'fire'
+
+
+def test_missing_and_unwritable_gamepad_file(tmp_path):
+    assert main.GamepadBindings(str(tmp_path / 'none.json')).pads == {}
+    blocker = tmp_path / 'file'
+    blocker.write_text('x')
+    pads = main.GamepadBindings(str(blocker / 'pads.json'))   # parent is a file
+    assert pads.rebind('x', 'fire', 9) is None                # save fails quietly
+    assert pads.action_for('x', 9) == 'fire'
+
+
+# ---- gamepad buttons in the game ------------------------------------------
+
+def two_pads_game(start_game):
+    game = start_game(slots=[('pad', 7), ('pad', 3), None, None])
+    game.pads = fake_pads(s7=(PAD_X, {}), s3=(PAD_Z, {}))
+    return game
+
+
+def test_remapped_buttons_drive_only_their_own_pad(start_game):
+    game = two_pads_game(start_game)
+    one, two = game.spaceships
+    game.pad_bindings.rebind(PAD_X[0], 'fire', 9)
+    _pad(game, 7, 0)                       # old fire of pad X
+    assert game.shots == []
+    _pad(game, 7, 9)
+    assert [s.spaceship for s in game.shots] == [one]
+    _pad(game, 3, 9)                       # pad Z keeps its own layout
+    assert len(game.shots) == 1
+    _pad(game, 3, 0)
+    assert [s.spaceship for s in game.shots] == [one, two]
+    game.pad_bindings.rebind(PAD_Z[0], 'up', 10)
+    game._on_joy_button_down(None, 3, 10)
+    assert two.thrust and not one.thrust
+    game._on_joy_button_up(None, 3, 10)
+    game._on_joy_button_down(None, 3, 1)   # the old thrust button
+    assert not two.thrust
+
+
+def test_same_model_pads_share_a_layout(start_game):
+    game = start_game(slots=[('pad', 7), ('pad', 8), None, None])
+    game.pads = fake_pads(s7=(PAD_X, {}), s8=(PAD_X, {}))
+    game.pad_bindings.rebind(PAD_X[0], 'fire', 9)
+    _pad(game, 7, 9)
+    _pad(game, 8, 9)
+    assert len(game.shots) == 2
+    _pad(game, 8, 0)
+    assert len(game.shots) == 2
+
+
+def test_rebind_while_a_button_is_held_does_not_strand_thrust(game):
+    ship = game.spaceships[0]
+    game._on_joy_button_down(None, 0, 1)
+    assert ship.thrust
+    game.pad_bindings.rebind(None, 'up', 9)
+    game._on_joy_button_up(None, 0, 1)
+    assert not ship.thrust
+
+
+def test_back_and_dpad_buttons_stay_fixed(game, monkeypatch):
+    monkeypatch.setattr(main, 'JOY_FIXED_ACTIONS', main.JOY_FIXED_ACTIONS_ANDROID)
+    game.pad_bindings.rebind(None, 'fire', 9)
+    game.pad_bindings.rebind(None, 'up', 10)
+    ship = game.spaceships[0]
+    game._on_joy_button_down(None, 0, 13)         # D-pad left
+    assert ship.angle_rotation == 3
+    game._on_joy_button_up(None, 0, 13)
+    game._on_joy_button_down(None, 0, 4)          # View / Back
+    assert game.paused
+
+
+def test_remapped_fire_does_not_change_the_menu(kv_game):
+    game = kv_game
+    game.pad_bindings.rebind(None, 'fire', 9)
+    _pad(game, 0, 9)                              # the remapped button
+    assert game.menu_active
+    _pad(game, 0, 0)                              # A still activates
+    assert game.select_active and not game.menu_active
+
+
+def test_menus_use_the_standard_buttons_with_any_layout(kv_game):
+    game = kv_game
+    game.pad_bindings.rebind(None, 'fire', 9)
+    game.pad_bindings.rebind(None, 'up', 10)
+    game.menu.selected = 2
+    game.menu.highlight()
+    _pad(game, 0, 1)                              # B moves up, as always
+    assert game.menu.selected == 1
+    _pad(game, 0, 10)                             # the remapped thrust: nothing
+    assert game.menu.selected == 1
+
+
+def test_remapped_fire_does_not_join_but_the_standard_button_does(kv_game):
+    game = kv_game
+    game.pad_bindings.rebind(None, 'fire', 9)
+    join = _join(game)
+    _pad(game, 4, 9)
+    assert join.slots[0] is None
+    _pad(game, 4, 0)
+    assert join.slots[0] == ('pad', 4)
+    _pad(game, 4, 0)
+    assert join.ready[0]
+
+
+def test_standard_buttons_in_pause_confirm_results_and_name(kv_game, tmp_path):
+    game = kv_game
+    game.pad_bindings.rebind(None, 'fire', 9)
+    game.game_start()
+    game.pause()
+    _pad(game, 0, 9)                              # remapped: nothing
+    assert game.paused
+    _pad(game, 0, 0)                              # A: Continue
+    assert not game.paused
+    game.pause()
+    game._on_joy_axis(None, 0, 1, 32767)          # down to Main menu
+    game._on_joy_axis(None, 0, 1, 0)
+    _pad(game, 0, 0)
+    assert hasattr(game, 'confirm_screen')
+    _pad(game, 0, 9)
+    assert hasattr(game, 'confirm_screen')
+    _pad(game, 0, 0)                              # "No" is the default
+    assert game.paused and not hasattr(game, 'confirm_screen')
+    game.resume()
+    game.leaderboard = main.Leaderboard(str(tmp_path / 'lb.json'))
+    game.spaceships[0].points = 5
+    _lose_all(game)
+    _armed(game.results_screen)
+    _pad(game, 0, 9)
+    assert game.results_active and not game.name_active
+    _pad(game, 0, 0)                              # Save to leaderboard
+    assert game.name_active
+    _pad(game, 0, 0)                              # Save
+    assert game.results_active
+    assert len(game.leaderboard.entries) == 1
+
+
+def test_remapped_buttons_play_the_game_after_the_menu(kv_game):
+    game = kv_game
+    game.pad_bindings.rebind(None, 'fire', 9)
+    game.game_start()
+    _pad(game, 0, 0)                              # A: no longer fires
+    assert game.shots == []
+    _pad(game, 0, 9)
+    assert len(game.shots) == 1
+
+
+def test_a_press_that_starts_the_game_does_not_fire_on_release(kv_game):
+    game = kv_game
+    game.ship_colors.path = None
+    game.show_ship_select(1)
+    game._on_joy_button_down(None, 0, 0)          # A readies: the game starts
+    assert game.spaceships and not game.select_active
+    game._on_joy_button_up(None, 0, 0)
+    assert game.shots == []
+
+
+# ---- analog thrust --------------------------------------------------------
+
+def test_thrust_level_scales_the_speed():
+    ship = Spaceship()
+    for level in (0.25, 0.5, 1):
+        ship.thrust_level = level
+        ship.thrust_on()
+        ship.speed = 0
+        ship.update(0)
+        assert ship.speed == pytest.approx(3 * level)
+        ship.thrust_off()
+
+
+def test_set_thrust_drives_the_engine(game):
+    ship, controls = game.spaceships[0], game.spaceship_controls
+    Spaceship.thrusting.clear()          # ships of other tests may linger
+    Spaceship.sound.stop()
+    controls.set_thrust(0.5)
+    assert ship.thrust and Spaceship.sound.state == 'play'
+    ship.speed = 0
+    ship.update(0)
+    assert ship.speed == pytest.approx(1.5)
+    controls.set_thrust(0.2)
+    assert ship.thrust_level == pytest.approx(0.2)
+    controls.set_thrust(0)
+    assert not ship.thrust and Spaceship.sound.state == 'stop'
+    ship.speed = 0
+    ship.update(0)
+    assert ship.speed == 0
+
+
+def test_a_held_thrust_key_is_full_power_whatever_the_trigger_does(game):
+    ship, controls = game.spaceships[0], game.spaceship_controls
+    controls.set_thrust(0.3)
+    controls.press('up')
+    assert ship.thrust_level == 1
+    controls.release('up')
+    assert ship.thrust and ship.thrust_level == pytest.approx(0.3)
+    controls.set_thrust(0)
+    assert not ship.thrust
+
+
+def test_keyboard_and_touch_thrust_stay_full_power(game):
+    ship = game.spaceships[0]
+    game._on_key_down(None, ord('w'))
+    ship.speed = 0
+    ship.update(0)
+    assert ship.speed == 3
+
+
+def test_analog_thrust_of_one_ship_leaves_the_others_alone(start_game):
+    game = start_game(slots=[('pad', 7), ('keys', 0), None, None])
+    game.pads = fake_pads(s7=(PAD_X, {}))
+    game.pad_bindings.bind_trigger(PAD_X[0], 5, -1.0, 1.0)
+    pad_ship, key_ship = game.spaceships
+    game._on_joy_axis(None, 7, 5, 32767)
+    game._on_key_down(None, ord('w'))
+    assert pad_ship.thrust_level == pytest.approx(1)
+    game._on_joy_axis(None, 7, 5, 0)                   # half pulled
+    assert 0.3 < pad_ship.thrust_level < 0.6
+    assert key_ship.thrust and key_ship.thrust_level == 1
+
+
+def trigger_game(start_game, rest, **kw):
+    game = start_game(slots=[('pad', 7), ('pad', 3), None, None])
+    game.pads = fake_pads(s7=(PAD_X, {}), s3=(PAD_Z, {}))
+    game.pad_bindings.bind_trigger(PAD_X[0], 5, rest, 1.0)
+    return game
+
+
+@pytest.mark.parametrize('rest, raw_rest, raw_half', [
+    (-1.0, -32767, 0), (0.0, 0, 16383)])
+def test_trigger_thrusts_with_the_pull(start_game, rest, raw_rest, raw_half):
+    game = trigger_game(start_game, rest)
+    one, two = game.spaceships
+    game._on_joy_axis(None, 7, 5, raw_rest)
+    assert not one.thrust
+    game._on_joy_axis(None, 7, 5, raw_half)
+    assert one.thrust and 0.3 < one.thrust_level < 0.6
+    half = one.thrust_level
+    game._on_joy_axis(None, 7, 5, 32767)
+    assert one.thrust_level == pytest.approx(1) and one.thrust_level > half
+    game._on_joy_axis(None, 7, 5, raw_rest)
+    assert not one.thrust
+    assert not two.thrust
+
+
+def test_a_bound_trigger_replaces_the_thrust_buttons_of_that_pad(start_game):
+    game = trigger_game(start_game, -1.0)
+    one, two = game.spaceships
+    game._on_joy_button_down(None, 7, 1)
+    assert not one.thrust
+    game._on_joy_button_down(None, 3, 1)               # pad Z has no trigger
+    assert two.thrust
+    game._on_joy_axis(None, 3, 5, 32767)               # not its trigger
+    assert not one.thrust
+
+
+def test_an_unbound_axis_does_nothing_and_the_stick_still_steers(start_game):
+    game = trigger_game(start_game, -1.0)
+    one, _ = game.spaceships
+    game._on_joy_axis(None, 7, 4, 32767)
+    assert not one.thrust
+    game._on_joy_axis(None, 7, 0, -32767)
+    assert one.angle_rotation == 3
+    game._on_joy_axis(None, 7, 1, -32767)
+    assert one.thrust and one.thrust_level == 1
+
+
+def test_trigger_is_ignored_while_paused_and_pause_lets_go(start_game):
+    game = trigger_game(start_game, -1.0)
+    one, _ = game.spaceships
+    game._on_joy_axis(None, 7, 5, 32767)
+    assert one.thrust
+    game.pause()
+    assert not one.thrust
+    game._on_joy_axis(None, 7, 5, 32767)
+    assert not one.thrust
+    game.resume()
+    assert not one.thrust
+    game._on_joy_axis(None, 7, 5, 32767)
+    assert one.thrust
+
+
+def test_trigger_of_a_pad_that_did_not_join_is_ignored(start_game):
+    game = start_game(slots=[('pad', 7), ('keys', 0), None, None])
+    game.pads = fake_pads(s7=(PAD_X, {}), s9=(PAD_Z, {}))
+    game.pad_bindings.bind_trigger(PAD_Z[0], 5, -1.0, 1.0)
+    game._on_joy_axis(None, 9, 5, 32767)
+    assert not any(ship.thrust for ship in game.spaceships)
+
+
+# ---- the gamepad buttons page --------------------------------------------
+
+def _open_gamepad(game):
+    _open_settings(game)
+    _press(game, 274)                    # down to "Gamepad buttons"
+    _press(game, KEY_ENTER)
+    assert isinstance(game.settings, main.GamepadSettings)
+    return game.settings
+
+
+def _texts(page):
+    ids = page.ids
+    return [ids[k].text for k in
+            ('btn_pad', 'btn_up', 'btn_fire')]
+
+
+def test_settings_hub_opens_gamepad_page_and_goes_back(kv_game):
+    game = kv_game
+    game.pads = fake_pads(s7=(PAD_X, {}))
+    page = _open_gamepad(game)
+    assert _texts(page) == ['Gamepad: Pad X', 'Thrust: B, Y', 'Fire: A, X']
+    assert [b.text for b in page.buttons] == [
+        'Gamepad: Pad X', 'Thrust: B, Y', 'Fire: A, X',
+        'Reset to defaults', 'Back']
+    _press(game, KEY_ESC)
+    assert isinstance(game.settings, main.SettingsScreen)
+    _press(game, KEY_ESC)
+    assert game.menu in game.children
+
+
+def test_gamepad_page_with_no_gamepad(kv_game):
+    game = kv_game
+    page = _open_gamepad(game)
+    assert page.ids.btn_pad.text == 'Gamepad: none connected'
+    assert page.ids.message.text == 'No gamepad connected'
+    assert [b.text for b in page.buttons] == ['Reset to defaults', 'Back']
+    page.begin_rebind('fire')
+    page.begin_rebind('up')
+    assert page.waiting == ''
+
+
+def test_gamepad_page_is_navigable_by_a_gamepad(kv_game):
+    game = kv_game
+    game.pads = fake_pads(s7=(PAD_X, {}))
+    page = _open_gamepad(game)
+    for _ in range(4):                      # down to "Back"
+        game._on_joy_axis(None, 7, 1, 32767)
+        game._on_joy_axis(None, 7, 1, 0)
+    assert page.buttons[page.selected].text == 'Back'
+    _pad(game, 7, 0)                        # fire button activates
+    assert isinstance(game.settings, main.SettingsScreen)
+
+
+def test_pad_selector_cycles_through_models(kv_game):
+    game = kv_game
+    game.pads = fake_pads(s7=(PAD_X, {}), s3=(PAD_Z, {}), s8=(PAD_X, {}))
+    game.pad_bindings.rebind(PAD_Z[0], 'fire', 9)
+    page = _open_gamepad(game)
+    assert page.ids.btn_pad.text == 'Gamepad: Pad X'
+    page.switch_pad()
+    assert _texts(page)[0:3] == ['Gamepad: Pad Z', 'Thrust: B, Y',
+                                 'Fire: Button 9']
+    page.switch_pad()                       # two X pads count once
+    assert page.ids.btn_pad.text == 'Gamepad: Pad X'
+
+
+def test_rebind_on_the_page_edits_only_the_selected_pad(kv_game, tmp_path):
+    game = kv_game
+    game.pad_bindings.path = str(tmp_path / 'pads.json')
+    game.pads = fake_pads(s7=(PAD_X, {}), s3=(PAD_Z, {}))
+    page = _open_gamepad(game)
+    page.begin_rebind('fire')
+    assert page.ids.btn_fire.text == 'Fire: press a button...'
+    game._on_joy_button_down(None, 7, 9)
+    assert page.ids.btn_fire.text == 'Fire: Button 9' and page.waiting == ''
+    assert game.pad_bindings.action_for(PAD_X[0], 9) == 'fire'
+    assert game.pad_bindings.action_for(PAD_Z[0], 0) == 'fire'
+    assert main.GamepadBindings(game.pad_bindings.path).label(
+        PAD_X[0], 'fire') == 'Button 9'
+
+
+def test_buttons_outside_waiting_change_nothing(kv_game):
+    game = kv_game
+    game.pads = fake_pads(s7=(PAD_X, {}))
+    page = _open_gamepad(game)
+    _pad(game, 7, 9)
+    assert _texts(page)[1:3] == ['Thrust: B, Y', 'Fire: A, X']
+
+
+def test_button_pressed_on_another_pad_is_ignored_while_waiting(kv_game):
+    game = kv_game
+    game.pads = fake_pads(s7=(PAD_X, {}), s3=(PAD_Z, {}))
+    page = _open_gamepad(game)
+    page.begin_rebind('up')
+    game._on_joy_button_down(None, 3, 9)
+    assert page.waiting == 'up'
+    assert game.pad_bindings.label(PAD_Z[0], 'up') == 'B, Y'
+    assert game.pad_bindings.label(PAD_X[0], 'up') == 'B, Y'
+    game._on_joy_button_down(None, 7, 9)
+    assert page.waiting == '' and page.ids.btn_up.text == 'Thrust: Button 9'
+
+
+def test_conflicting_and_reserved_buttons_are_refused_with_a_message(
+        kv_game, monkeypatch):
+    # where the D-pad arrives as buttons (Android) they can not be bound
+    monkeypatch.setattr(main, 'JOY_FIXED_ACTIONS', main.JOY_FIXED_ACTIONS_ANDROID)
+    game = kv_game
+    game.pads = fake_pads(s7=(PAD_X, {}))
+    page = _open_gamepad(game)
+    page.begin_rebind('fire')
+    game._on_joy_button_down(None, 7, 1)             # a thrust button
+    assert page.ids.message.text == 'Already used for Thrust'
+    assert page.ids.btn_fire.text == 'Fire: A, X' and page.waiting == ''
+    page.begin_rebind('up')
+    game._on_joy_button_down(None, 7, 11)             # D-pad up
+    assert page.ids.message.text == 'That button is reserved'
+    assert page.ids.btn_up.text == 'Thrust: B, Y'
+
+
+def test_back_button_or_escape_cancel_waiting_without_leaving(kv_game):
+    game = kv_game
+    game.pads = fake_pads(s7=(PAD_X, {}))
+    page = _open_gamepad(game)
+    back = next(b for b, a in main.JOY_FIXED_ACTIONS.items() if a == 'back')
+    page.begin_rebind('fire')
+    game._on_joy_button_down(None, 7, back)
+    game._on_joy_button_up(None, 7, back)
+    assert game.settings is page and game.settings_active and page.waiting == ''
+    assert page.ids.btn_fire.text == 'Fire: A, X'
+    page.begin_rebind('fire')
+    _press(game, ord('a'))                            # other keys: still waiting
+    assert page.waiting == 'fire'
+    _press(game, KEY_ESC)
+    assert game.settings is page and game.settings_active and page.waiting == ''
+
+
+def test_the_press_that_selects_an_entry_does_not_bind_itself(kv_game):
+    game = kv_game
+    game.pads = fake_pads(s7=(PAD_X, {}))
+    page = _open_gamepad(game)
+    game._on_joy_axis(None, 7, 1, 32767)              # down to "Thrust"
+    game._on_joy_axis(None, 7, 1, 0)
+    game._on_joy_button_down(None, 7, 0)              # A activates it
+    assert page.waiting == 'up'
+    game._on_joy_button_up(None, 7, 0)
+    assert page.waiting == 'up'
+    assert game.pad_bindings.label(PAD_X[0], 'up') == 'B, Y'
+    game._on_joy_axis(None, 7, 0, 32767)              # stick is ignored
+    assert page.waiting == 'up'
+
+
+@pytest.mark.parametrize('rest, raw_rest, raw_pull', [
+    (-1.0, -32767, 32767), (0.0, 0, 30000)])
+def test_thrust_takes_a_pulled_trigger(kv_game, rest, raw_rest, raw_pull):
+    game = kv_game
+    game.pads = fake_pads(s7=(PAD_X, {4: rest, 5: rest}))
+    page = _open_gamepad(game)
+    page.begin_rebind('up')
+    assert page.ids.btn_up.text == 'Thrust: button or trigger...'
+    game._on_joy_axis(None, 7, 4, raw_rest)           # still: not bound
+    assert page.waiting == 'up'
+    game._on_joy_axis(None, 7, 5, raw_pull)
+    assert page.waiting == '' and page.ids.btn_up.text == (
+        'Thrust: trigger (axis 5)')
+    assert game.pad_bindings.profile(PAD_X[0])['trigger'] == {
+        'axis': 5, 'rest': rest, 'full': 1.0}
+
+
+def test_thrust_takes_a_button_or_a_trigger_whichever_comes(kv_game):
+    game = kv_game
+    game.pads = fake_pads(s7=(PAD_X, {5: -1.0}))
+    page = _open_gamepad(game)
+    page.begin_rebind('up')
+    game._on_joy_button_down(None, 7, 9)
+    assert page.ids.btn_up.text == 'Thrust: Button 9'
+    page.begin_rebind('up')
+    game._on_joy_axis(None, 7, 5, 32767)
+    assert page.ids.btn_up.text == 'Thrust: trigger (axis 5)'
+    page.begin_rebind('up')                           # and back to a button
+    game._on_joy_button_down(None, 7, 3)
+    assert page.ids.btn_up.text == 'Thrust: Y'
+    assert game.pad_bindings.profile(PAD_X[0])['trigger'] is None
+
+
+def test_fire_waits_for_a_button_only(kv_game):
+    game = kv_game
+    game.pads = fake_pads(s7=(PAD_X, {5: -1.0}))
+    page = _open_gamepad(game)
+    page.begin_rebind('fire')
+    game._on_joy_axis(None, 7, 5, 32767)              # a trigger: not for fire
+    assert page.waiting == 'fire'
+    assert game.pad_bindings.profile(PAD_X[0])['trigger'] is None
+
+
+def test_trigger_capture_ignores_other_pads_and_the_stick(kv_game):
+    game = kv_game
+    game.pads = fake_pads(s7=(PAD_X, {4: -1.0}), s3=(PAD_Z, {4: -1.0}))
+    page = _open_gamepad(game)
+    page.begin_rebind('up')
+    game._on_joy_axis(None, 3, 4, 32767)              # pad Z's trigger
+    assert page.waiting == 'up'
+    game._on_joy_axis(None, 7, 0, 32767)              # the stick steers
+    game._on_joy_axis(None, 7, 1, -32767)
+    assert page.waiting == 'up'
+    assert game.pad_bindings.profile(PAD_X[0])['trigger'] is None
+
+
+def test_back_cancels_waiting_for_thrust_and_a_bound_trigger_is_shown(kv_game):
+    game = kv_game
+    game.pads = fake_pads(s7=(PAD_X, {4: -1.0}))
+    game.pad_bindings.bind_trigger(PAD_X[0], 4, -1.0, 1.0)
+    page = _open_gamepad(game)
+    assert page.ids.btn_up.text == 'Thrust: trigger (axis 4)'
+    page.begin_rebind('up')
+    back = next(b for b, a in main.JOY_FIXED_ACTIONS.items() if a == 'back')
+    game._on_joy_button_down(None, 7, back)
+    assert page.waiting == '' and game.settings is page
+    assert page.ids.btn_up.text == 'Thrust: trigger (axis 4)'
+
+
+def test_reset_on_the_page_resets_one_pad_and_keeps_the_keyboard(kv_game):
+    game = kv_game
+    game.bindings.path = None
+    game.pads = fake_pads(s7=(PAD_X, {}), s3=(PAD_Z, {}))
+    game.bindings.rebind('fire', KEY_F)
+    for ident in (PAD_X[0], PAD_Z[0]):
+        game.pad_bindings.rebind(ident, 'fire', 9)
+        game.pad_bindings.bind_trigger(ident, 5, 0.0, 1.0)
+    page = _open_gamepad(game)
+    page.reset()
+    assert _texts(page)[1:] == ['Thrust: B, Y', 'Fire: A, X']
+    assert game.pad_bindings.label(PAD_Z[0], 'fire') == 'Button 9'
+    assert game.pad_bindings.label(PAD_Z[0], 'up') == 'trigger (axis 5)'
+    assert game.bindings.label('fire') == 'F'
+
+
+def test_unidentified_pad_can_be_edited_for_the_session(kv_game, tmp_path):
+    game = kv_game
+    game.pad_bindings.path = str(tmp_path / 'pads.json')
+    _pad(game, 5, 9)                                  # a pad shows up
+    page = _open_gamepad(game)
+    assert page.ids.btn_pad.text == 'Gamepad: Unidentified gamepad'
+    page.begin_rebind('fire')
+    game._on_joy_button_down(None, 5, 9)
+    assert page.ids.btn_fire.text == 'Fire: Button 9'
+    assert not os.path.exists(game.pad_bindings.path)
+    assert main.GamepadBindings(game.pad_bindings.path).label(
+        None, 'fire') == 'A, X'
+
+
+def test_gamepad_settings_refresh_before_the_kv_is_loaded():
+    page = main.GamepadSettings(bindings=main.GamepadBindings())
+    assert page.waiting == '' and not page.has_pad
+
+
+# ---- thrust power of the sticks ------------------------------------------
+
+def test_stick_level_grows_from_the_start_to_the_edge():
+    assert main.stick_level(0) == 0
+    assert main.stick_level(main.STICK_THRUST_START) == 0
+    assert main.stick_level(1) == 1 and main.stick_level(7) == 1
+    assert 0.4 < main.stick_level(0.675) < 0.6          # half way
+    assert main.stick_level(0.5) < main.stick_level(0.8)
+    assert main.stick_level(-1) == 0
+
+
+def test_on_screen_joystick_thrusts_with_the_push(game):
+    game._on_window_touch(None, None)
+    layout = game.spaceship_controls.touch_buttons
+    ship = game.spaceships[0]
+    touch, _ = _touch_down(layout, _stick_pos(layout, 0, 0.2))
+    assert not ship.thrust                              # inside the dead zone
+    _move(layout, touch, _stick_pos(layout, 0, 0.675))
+    assert ship.thrust and 0.4 < ship.thrust_level < 0.6
+    half = ship.thrust_level
+    _move(layout, touch, _stick_pos(layout, 0, 1.0))
+    assert ship.thrust_level == pytest.approx(1) and ship.thrust_level > half
+    ship.speed = 0
+    ship.update(0)
+    assert ship.speed == pytest.approx(3)
+    _move(layout, touch, _stick_pos(layout, 0, 0.5))
+    assert 0 < ship.thrust_level < 0.5
+    _release(touch, layout.stick)
+    assert not ship.thrust
+
+
+def test_on_screen_joystick_turns_at_full_rate_while_thrusting_softly(game):
+    game._on_window_touch(None, None)
+    layout = game.spaceship_controls.touch_buttons
+    ship = game.spaceships[0]
+    _touch_down(layout, _stick_pos(layout, -0.5, 0.6))
+    assert ship.angle_rotation == 3 and ship.thrust
+    assert ship.thrust_level < 0.5
+
+
+def test_gamepad_stick_thrusts_with_the_push(game):
+    ship = game.spaceships[0]
+    game._on_joy_axis(None, 0, 1, -int(0.2 * 32767))    # dead zone
+    assert not ship.thrust
+    game._on_joy_axis(None, 0, 1, -int(0.675 * 32767))
+    assert ship.thrust and 0.4 < ship.thrust_level < 0.6
+    game._on_joy_axis(None, 0, 1, -32767)
+    assert ship.thrust_level == pytest.approx(1)
+    game._on_joy_axis(None, 0, 1, 32767)                # down: nothing
+    assert not ship.thrust
+    game._on_joy_axis(None, 0, 1, -32767)
+    game._on_joy_axis(None, 0, 1, 0)
+    assert not ship.thrust
+
+
+def test_gamepad_stick_thrust_belongs_to_the_joined_pad(start_game):
+    game = start_game(slots=[('pad', 7), ('keys', 0), None, None])
+    one, two = game.spaceships
+    game._on_joy_axis(None, 7, 1, -32767)
+    assert one.thrust and not two.thrust
+    game._on_joy_axis(None, 9, 1, -32767)               # did not join
+    assert not two.thrust
+
+
+def test_gamepad_dpad_and_button_stay_full_power(game):
+    ship = game.spaceships[0]
+    game._on_joy_hat(None, 0, 0, (0, 1))                # D-pad up
+    assert ship.thrust and ship.thrust_level == 1
+    game._on_joy_hat(None, 0, 0, (0, 0))
+    game._on_joy_axis(None, 0, 1, -int(0.7 * 32767))
+    game._on_joy_button_down(None, 0, 1)                # Thrust button
+    assert ship.thrust_level == 1
+    game._on_joy_button_up(None, 0, 1)
+    assert 0 < ship.thrust_level < 1                    # back to the stick
+
+
+def test_stick_and_trigger_thrust_together_take_the_stronger(start_game):
+    game = trigger_game(start_game, -1.0)
+    one, _ = game.spaceships
+    game._on_joy_axis(None, 7, 1, -int(0.7 * 32767))
+    stick = one.thrust_level
+    game._on_joy_axis(None, 7, 5, 32767)
+    assert one.thrust_level == pytest.approx(1)
+    game._on_joy_axis(None, 7, 5, -32767)
+    assert one.thrust_level == pytest.approx(stick)
+    game._on_joy_axis(None, 7, 1, 0)
+    assert not one.thrust
+
+
+def test_pause_lets_go_of_the_stick(game):
+    ship = game.spaceships[0]
+    game._on_joy_axis(None, 0, 1, -32767)
+    assert ship.thrust
+    game.pause()
+    assert not ship.thrust
+    game.resume()
+    assert not ship.thrust
+
+
+def test_stick_still_navigates_menus(kv_game):
+    game = kv_game
+    game._on_joy_axis(None, 0, 1, 32767)                # down
+    game._on_joy_axis(None, 0, 1, 0)
+    assert game.menu.selected == 1
+    game._on_joy_axis(None, 0, 1, -32767)               # up
+    game._on_joy_axis(None, 0, 1, 0)
+    assert game.menu.selected == 0

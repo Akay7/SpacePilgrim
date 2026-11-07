@@ -1,4 +1,4 @@
-__version__ = "0.4.1"
+__version__ = "0.5.0"
 
 import colorsys
 import json
@@ -317,20 +317,238 @@ class TouchSettings:
 # Android SDL numbers them like a game controller: A B X Y, 4 Back (View),
 # 5 Guide, 6 Start, 7 / 8 stick clicks (must not leave the game), 9 / 10
 # shoulders, 11-14 D-pad.
-JOY_BUTTON_ACTIONS_DESKTOP = {
-    0: 'fire', 2: 'fire',
-    1: 'up', 3: 'up',
-    6: 'back', 7: 'back',
+#
+# Thrust and fire are rebindable per gamepad (Settings > Gamepad buttons);
+# JOY_DEFAULT_BUTTONS are what a gamepad has until then. Back/Start and
+# the Android D-pad buttons are fixed and can not be bound: they drive the
+# menus and leaving the game, so no binding can lock the player out.
+JOY_DEFAULT_BUTTONS = {
+    'fire': [0, 2],
+    'up': [1, 3],
 }
-JOY_BUTTON_ACTIONS_ANDROID = {
-    0: 'fire', 2: 'fire',
-    1: 'up', 3: 'up',
+JOY_FIXED_ACTIONS_DESKTOP = {6: 'back', 7: 'back'}
+JOY_FIXED_ACTIONS_ANDROID = {
     4: 'back', 6: 'back',
     11: 'up', 12: 'down', 13: 'left', 14: 'right',
 }
+
+
+def _joy_actions(fixed):
+    actions = {b: a for a, buttons in JOY_DEFAULT_BUTTONS.items()
+               for b in buttons}
+    actions.update(fixed)
+    return actions
+
+
+JOY_BUTTON_ACTIONS_DESKTOP = _joy_actions(JOY_FIXED_ACTIONS_DESKTOP)
+JOY_BUTTON_ACTIONS_ANDROID = _joy_actions(JOY_FIXED_ACTIONS_ANDROID)
+JOY_FIXED_ACTIONS = (JOY_FIXED_ACTIONS_ANDROID if platform == 'android'
+                     else JOY_FIXED_ACTIONS_DESKTOP)
 JOY_BUTTON_ACTIONS = (JOY_BUTTON_ACTIONS_ANDROID if platform == 'android'
                       else JOY_BUTTON_ACTIONS_DESKTOP)
 JOY_AXIS_DEADZONE = 0.5
+JOY_STICK_AXES = (0, 1)   # the left stick steers; not a thrust trigger
+PAD_ACTIONS = ('up', 'fire')   # the rebindable ones, in page order
+PAD_ACTION_LABELS = {'up': 'Thrust', 'fire': 'Fire'}
+PAD_BUTTON_NAMES = {0: 'A', 1: 'B', 2: 'X', 3: 'Y'}
+# A trigger counts as pulled when it moved this far from rest while its
+# binding waits, and its first TRIGGER_DEADZONE of travel gives no thrust.
+TRIGGER_CAPTURE_TRAVEL = 0.5
+TRIGGER_DEADZONE = 0.1
+
+
+# A stick (the on-screen one or a gamepad's) starts to thrust when pushed
+# this far (share of its range) and reaches full power at the end.
+STICK_THRUST_START = 0.35
+
+
+def stick_level(push):
+    """Thrust power 0..1 of a stick pushed `push` (0..1) towards "up"."""
+    if push <= STICK_THRUST_START:
+        return 0.0
+    return min(1.0, (push - STICK_THRUST_START) / (1 - STICK_THRUST_START))
+
+
+def pad_button_name(button):
+    return PAD_BUTTON_NAMES.get(button, 'Button {}'.format(button))
+
+
+def trigger_level(trigger, value):
+    """Thrust power 0..1 of a trigger at axis `value` (-1..1): how far it
+    is from its resting value towards the end of its travel."""
+    span = trigger['full'] - trigger['rest']
+    travel = (value - trigger['rest']) / span if span else 0.0
+    travel = min(1.0, max(0.0, travel))
+    if travel <= TRIGGER_DEADZONE:
+        return 0.0
+    return (travel - TRIGGER_DEADZONE) / (1 - TRIGGER_DEADZONE)
+
+
+def _is_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+class GamepadBindings:
+    """Thrust and fire buttons and the optional thrust trigger of every
+    gamepad model, optionally persisted as JSON. A layout is kept per pad
+    identity (see PadIdentity), so pads of the same model share one and
+    different models have their own. `None` stands for a pad that could
+    not be identified: it uses the defaults and its changes are kept for
+    the session only."""
+
+    VERSION = 1
+
+    def __init__(self, path=None):
+        self.path = path
+        self.pads = {}        # identity -> profile, as saved
+        self.session = None   # profile of unidentified pads (never saved)
+        self.load()
+
+    @staticmethod
+    def _default_profile():
+        return {'buttons': {a: list(b) for a, b in JOY_DEFAULT_BUTTONS.items()},
+                'trigger': None}
+
+    def profile(self, identity):
+        """The layout of a pad (the defaults for one never changed). Do
+        not modify the result."""
+        stored = self.session if identity is None else self.pads.get(identity)
+        return stored or self._default_profile()
+
+    def _editable(self, identity):
+        """The stored profile of a pad, created from the defaults."""
+        if identity is None:
+            if self.session is None:
+                self.session = self._default_profile()
+            return self.session
+        return self.pads.setdefault(identity, self._default_profile())
+
+    def _changed(self, identity):
+        if identity is not None:      # unidentified pads: this session only
+            self.save()
+
+    def action_for(self, identity, button):
+        """'fire', 'up', ... of a button of a pad; None for an unbound one.
+        Fixed buttons (Back, Android D-pad) come first and mean the same on
+        every pad. A bound trigger replaces the thrust buttons."""
+        fixed = JOY_FIXED_ACTIONS.get(button)
+        if fixed:
+            return fixed
+        profile = self.profile(identity)
+        for action, buttons in profile['buttons'].items():
+            if button in buttons:
+                if action == 'up' and profile['trigger']:
+                    return None
+                return action
+
+    def label(self, identity, action):
+        """What is bound to `action`: its buttons, or for thrust the trigger."""
+        profile = self.profile(identity)
+        if action == 'up' and profile['trigger']:
+            return 'trigger (axis {})'.format(profile['trigger']['axis'])
+        return ', '.join(pad_button_name(b) for b in profile['buttons'][action])
+
+    def rebind(self, identity, action, button):
+        """Bind `button` to `action` of a pad. Returns None on success or a
+        message saying why the button was refused (the old one is kept)."""
+        if not isinstance(button, int) or isinstance(button, bool):
+            return 'That button can not be used'
+        if button in JOY_FIXED_ACTIONS:
+            return 'That button is reserved'
+        profile = self.profile(identity)
+        for other, buttons in profile['buttons'].items():
+            # the thrust buttons mean nothing while a trigger thrusts
+            if other == 'up' and profile['trigger']:
+                continue
+            if other != action and button in buttons:
+                return 'Already used for {}'.format(PAD_ACTION_LABELS[other])
+        edit = self._editable(identity)
+        edit['buttons'][action] = [button]
+        if action == 'up':
+            edit['trigger'] = None     # a button replaces the trigger
+        self._changed(identity)
+
+    def bind_trigger(self, identity, axis, rest, full):
+        """Make `axis` (resting at `rest`, fully pulled at `full`) the thrust
+        of a pad, in place of its thrust buttons. Returns None or a message
+        saying why not."""
+        if axis in JOY_STICK_AXES:
+            return 'The stick is reserved'
+        if rest == full:
+            return 'That axis can not be used'
+        self._editable(identity)['trigger'] = {
+            'axis': axis, 'rest': rest, 'full': full}
+        self._changed(identity)
+
+    def reset(self, identity):
+        """Back to the defaults for one pad; other pads are untouched."""
+        if identity is None:
+            self.session = None
+        else:
+            self.pads.pop(identity, None)
+        self._changed(identity)
+
+    @staticmethod
+    def _valid_trigger(trigger):
+        if trigger is None:
+            return True
+        return (isinstance(trigger, dict)
+                and set(trigger) == {'axis', 'rest', 'full'}
+                and isinstance(trigger['axis'], int)
+                and not isinstance(trigger['axis'], bool)
+                and trigger['axis'] not in JOY_STICK_AXES
+                and _is_number(trigger['rest']) and _is_number(trigger['full'])
+                and abs(trigger['rest']) <= 1 and abs(trigger['full']) <= 1
+                and trigger['rest'] != trigger['full'])
+
+    @classmethod
+    def _valid_profile(cls, profile):
+        if not isinstance(profile, dict) or set(profile) != {'buttons', 'trigger'}:
+            return False
+        buttons = profile['buttons']
+        if not isinstance(buttons, dict) or set(buttons) != set(PAD_ACTIONS):
+            return False
+        seen = set()
+        for ids in buttons.values():
+            if not isinstance(ids, list) or not ids:
+                return False
+            for button in ids:
+                if (not isinstance(button, int) or isinstance(button, bool)
+                        or button in JOY_FIXED_ACTIONS or button in seen):
+                    return False
+                seen.add(button)
+        return cls._valid_trigger(profile['trigger'])
+
+    def load(self):
+        if not self.path:
+            return
+        try:
+            with open(self.path) as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return
+        if not isinstance(data, dict) or data.get('version') != self.VERSION:
+            return
+        pads = data.get('pads')
+        if not isinstance(pads, dict):
+            return
+        for identity, profile in pads.items():
+            if self._valid_profile(profile):
+                self.pads[identity] = {
+                    'buttons': {a: list(profile['buttons'][a])
+                                for a in PAD_ACTIONS},
+                    'trigger': (None if profile['trigger'] is None
+                                else dict(profile['trigger']))}
+
+    def save(self):
+        if not self.path:
+            return
+        try:
+            os.makedirs(os.path.dirname(self.path) or '.', exist_ok=True)
+            with open(self.path, 'w') as f:
+                json.dump({'version': self.VERSION, 'pads': self.pads}, f)
+        except OSError:
+            pass  # keep the in-memory bindings for this session
 
 
 # Cabin colours: name -> hue in degrees. The sprite's canopy is blue (~210).
@@ -620,7 +838,8 @@ class PadWatcher:
     """Opens gamepads that connect after the app has started.
 
     Kivy opens the joysticks SDL knows at start-up and never the ones that
-    appear later (a Bluetooth pad switched on in the menu, or a reconnect),
+    appear later (a Bluetooth pad switched on in the menu, or a reconnect,
+    on Android and on the desktop alike),
     and SDL sends no stick or D-pad events for a joystick that is not open:
     only the buttons arrive, as plain keys. This looks for new ones four
     times a second and opens them, so that sticks, D-pad and buttons reach the game
@@ -652,18 +871,139 @@ class PadWatcher:
             sdl.SDL_JoystickClose(self.open.pop(instance))
 
 
-def watch_gamepads():
-    """Android: keep opening newly connected gamepads (see PadWatcher).
-    Returns the Clock event, or None where it is not needed or possible."""
-    if platform != 'android':
-        return None
+def start_pad_watcher(sdl):
+    """Start opening newly connected gamepads (see PadWatcher). Returns the
+    Clock event, or None when it is not possible."""
     try:
-        import ctypes
-        watcher = PadWatcher(ctypes.CDLL('libSDL2.so'))
+        watcher = PadWatcher(sdl)
         watcher.poll()
-        return Clock.schedule_interval(watcher.poll, 0.25)
+        # a plain function: the Clock holds a bound method weakly, and the
+        # watcher would be collected, silently ending the polling
+        return Clock.schedule_interval(lambda dt: watcher.poll(dt), 0.25)
     except Exception:
         return None
+
+
+def watch_gamepads():
+    """Keep opening newly connected gamepads, on every platform: Kivy only
+    opens the ones present at start-up, so a pad that is switched on later
+    or unplugged and plugged in again would stay silent. Returns the Clock
+    event, or None where SDL can not be reached."""
+    sdl = load_sdl()
+    return None if sdl is None else start_pad_watcher(sdl)
+
+
+def load_sdl():
+    """The SDL2 library Kivy already runs on, for ctypes; None when it can
+    not be found."""
+    import ctypes
+    try:
+        if platform == 'android':
+            return ctypes.CDLL('libSDL2.so')
+        import glob
+        import kivy
+        root = os.path.join(os.path.dirname(kivy.__file__), '..')
+        for pattern in ('Kivy.libs/libSDL2-2*', 'kivy/.dylibs/libSDL2-2*'):
+            for path in sorted(glob.glob(os.path.join(root, pattern))):
+                return ctypes.CDLL(path)
+        for name in ('libSDL2.so', 'SDL2.dll'):
+            try:
+                return ctypes.CDLL(name)
+            except OSError:
+                continue
+    except Exception:
+        pass
+    return None
+
+
+class PadIdentity:
+    """Tells gamepads apart by name and GUID, so that a layout belongs to
+    a pad model and is found again after a restart or reconnect. Kivy only
+    reports the SDL instance id of a stick, so the name and GUID are asked
+    from SDL. Everything it cannot find out is answered with None, an
+    empty list or an empty dict: such a pad is "unidentified"."""
+
+    def __init__(self, sdl=None):
+        self.sdl = sdl
+        if sdl is None:
+            return
+        import ctypes
+
+        class GUID(ctypes.Structure):
+            _fields_ = [('data', ctypes.c_uint8 * 16)]
+
+        try:
+            sdl.SDL_NumJoysticks.restype = ctypes.c_int
+            sdl.SDL_JoystickGetDeviceInstanceID.argtypes = [ctypes.c_int]
+            sdl.SDL_JoystickGetDeviceInstanceID.restype = ctypes.c_int32
+            sdl.SDL_JoystickNameForIndex.argtypes = [ctypes.c_int]
+            sdl.SDL_JoystickNameForIndex.restype = ctypes.c_char_p
+            sdl.SDL_JoystickGetDeviceGUID.argtypes = [ctypes.c_int]
+            sdl.SDL_JoystickGetDeviceGUID.restype = GUID
+            sdl.SDL_JoystickFromInstanceID.argtypes = [ctypes.c_int32]
+            sdl.SDL_JoystickFromInstanceID.restype = ctypes.c_void_p
+            sdl.SDL_JoystickNumAxes.argtypes = [ctypes.c_void_p]
+            sdl.SDL_JoystickNumAxes.restype = ctypes.c_int
+            sdl.SDL_JoystickGetAxis.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            sdl.SDL_JoystickGetAxis.restype = ctypes.c_int16
+        except AttributeError:
+            self.sdl = None   # an SDL without these calls: no identities
+
+    def _devices(self):
+        """[(instance id, identity, name)] of the connected pads."""
+        sdl = self.sdl
+        if sdl is None:
+            return []
+        try:
+            found = []
+            for index in range(sdl.SDL_NumJoysticks()):
+                name = (sdl.SDL_JoystickNameForIndex(index) or b'').decode(
+                    'utf-8', 'replace')
+                guid = bytes(sdl.SDL_JoystickGetDeviceGUID(index).data).hex()
+                found.append((sdl.SDL_JoystickGetDeviceInstanceID(index),
+                              '{}|{}'.format(guid, name), name or 'Gamepad'))
+            return found
+        except Exception:
+            return []
+
+    def _axis_values(self, instance):
+        """{axis: value -1..1} of an open pad."""
+        sdl = self.sdl
+        try:
+            handle = sdl.SDL_JoystickFromInstanceID(instance)
+            if not handle:
+                return {}
+            return {axis: sdl.SDL_JoystickGetAxis(handle, axis) / 32767
+                    for axis in range(sdl.SDL_JoystickNumAxes(handle))}
+        except Exception:
+            return {}
+
+    def identity(self, stick):
+        """(identity, name) of the pad whose events carry id `stick`."""
+        for instance, identity, name in self._devices():
+            if instance == stick:
+                return identity, name
+
+    def connected(self):
+        """[(identity, name)] of the connected pads, one per model."""
+        pads = {}
+        for _, identity, name in self._devices():
+            pads.setdefault(identity, name)
+        return list(pads.items())
+
+    def axes(self, identity):
+        """Current value of every axis of a connected pad of this model."""
+        for instance, other, _ in self._devices():
+            if other == identity:
+                return self._axis_values(instance)
+        return {}
+
+
+def make_pad_identity():
+    try:
+        return PadIdentity(load_sdl())
+    except Exception:
+        return PadIdentity(None)
 
 
 def has_touchscreen():
@@ -808,6 +1148,7 @@ class Spaceship(Widget):
     points = NumericProperty(0)
     speed = NumericProperty(0)
     thrust = BooleanProperty(False)
+    thrust_level = NumericProperty(1)   # power 0..1 while `thrust` is on
     angle = NumericProperty(0)
     angle_rotation = NumericProperty(0)
     rotate = StringProperty()
@@ -838,7 +1179,7 @@ class Spaceship(Widget):
 
         self.angle += self.angle_rotation
         if self.thrust:
-            self.speed = 3
+            self.speed = 3 * self.thrust_level
         else:
             self.speed *= 0.98
 
@@ -1116,7 +1457,7 @@ class LeaderboardScreen(ButtonColumn):
 
 
 class SettingsScreen(ButtonColumn):
-    """Settings hub: Keyboard layout / Touch controls."""
+    """Settings hub: Keyboard layout / Gamepad buttons / Touch controls."""
 
     def go_back(self):
         self.parent.close_settings()
@@ -1220,6 +1561,133 @@ class KeyboardSettings(ButtonColumn):
     def reset(self):
         self.waiting = ''
         self.bindings.reset()
+        self.refresh()
+
+
+class GamepadSettings(ButtonColumn):
+    """Gamepad buttons: choose a pad, then pick thrust or fire and press the
+    new button on that pad; thrust can also be given to a trigger by pulling
+    it."""
+    bindings = ObjectProperty()                # GamepadBindings
+    pad_list = ObjectProperty(None)            # () -> [(identity, name)]
+    axis_rest = ObjectProperty(None)           # identity -> {axis: value}
+    waiting = StringProperty('')               # 'up', 'fire' or ''
+    pad = ObjectProperty(None, allownone=True)   # identity being edited
+    has_pad = BooleanProperty(False)
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.rest = {}       # axis -> resting value while thrust is awaited
+        self.names = {}      # identity -> name
+        self.refresh()
+
+    def _choose(self, step=0):
+        """Re-read the connected pads and keep (or move) the edited one."""
+        pads = list(self.pad_list()) if self.pad_list else []
+        self.names = dict(pads)
+        identities = [identity for identity, _ in pads]
+        before = self.pad
+        self.has_pad = bool(identities)
+        if not identities:
+            self.pad = None
+        elif self.pad in identities:
+            self.pad = identities[
+                (identities.index(self.pad) + step) % len(identities)]
+        else:
+            self.pad = identities[0]
+        if self.pad != before or not self.has_pad:
+            self.waiting = ''   # the pad that was waited for is gone
+
+    def refresh(self, message=''):
+        ids = self.ids
+        if 'message' not in ids:
+            return
+        self._choose()
+        pad = self.pad
+        for key in ('btn_pad', 'btn_up', 'btn_fire'):
+            ids[key].disabled = not self.has_pad
+        if self.has_pad:
+            ids['btn_pad'].text = 'Gamepad: {}'.format(self.names[pad])
+            for action in PAD_ACTIONS:
+                if self.waiting == action:
+                    value = ('button or trigger...' if action == 'up'
+                             else 'press a button...')
+                else:
+                    value = self.bindings.label(pad, action)
+                ids['btn_' + action].text = '{}: {}'.format(
+                    PAD_ACTION_LABELS[action], value)
+        else:
+            ids['btn_pad'].text = 'Gamepad: none connected'
+            for action in PAD_ACTIONS:
+                ids['btn_' + action].text = PAD_ACTION_LABELS[action]
+        ids['message'].text = message or (
+            '' if self.has_pad else 'No gamepad connected')
+        self.highlight()
+
+    def switch_pad(self):
+        self.waiting = ''
+        self._choose(1)
+        self.refresh()
+
+    def go_back(self):
+        self.parent.show_settings()
+
+    def begin_rebind(self, action):
+        """Wait for a button; for thrust also for a pulled trigger."""
+        if not self.has_pad:
+            return
+        self.waiting = action
+        if action == 'up':
+            # where each axis rests, to tell a pulled trigger from a still one
+            self.rest = (
+                self.axis_rest(self.pad) if self.axis_rest else {}) or {}
+        self.refresh()
+
+    def cancel_rebind(self):
+        self.waiting = ''
+        self.refresh()
+
+    def handle_key(self, key, scancode=None):
+        """Keys while waiting: Escape cancels, others change nothing."""
+        if not self.waiting:
+            return False
+        if key == 27:
+            self.cancel_rebind()
+        return True
+
+    def handle_button(self, identity, button):
+        """A gamepad button while waiting. Always consumed; only a button of
+        the pad being edited counts: Back cancels, others are bound."""
+        if not self.waiting or identity != self.pad:
+            return self.waiting != ''
+        if JOY_FIXED_ACTIONS.get(button) == 'back':
+            self.cancel_rebind()
+        else:
+            action, self.waiting = self.waiting, ''
+            self.refresh(self.bindings.rebind(identity, action, button) or '')
+        return True
+
+    def handle_axis(self, identity, axis, value):
+        """An axis while waiting for thrust: the first one pulled far
+        enough from its rest is bound as its trigger. Returns True if it was
+        consumed."""
+        if self.waiting != 'up' or identity != self.pad:
+            return False
+        if axis in JOY_STICK_AXES:
+            return False         # the stick steers: never a trigger
+        rest = self.rest.get(axis, 0.0)
+        if abs(value - rest) <= TRIGGER_CAPTURE_TRAVEL:
+            return False
+        self.waiting = ''
+        error = self.bindings.bind_trigger(
+            identity, axis, rest, 1.0 if value > rest else -1.0)
+        self.refresh(error or '')
+        return True
+
+    def reset(self):
+        self.waiting = ''
+        if self.has_pad:
+            self.bindings.reset(self.pad)
         self.refresh()
 
 
@@ -1394,9 +1862,9 @@ class Joystick(Widget):
             wanted.add('left')
         if dx > t:
             wanted.add('right')
-        if dy > t:
-            wanted.add('up')
         self._apply(wanted)
+        # thrust has a power: how far up the knob is pushed
+        self.parent.thrust(stick_level(dy))
 
     def _apply(self, wanted):
         for action in self._held - wanted:
@@ -1411,6 +1879,8 @@ class Joystick(Widget):
             self._touch.ungrab(self)
             self._touch = None
         self._apply(set())
+        if self.parent is not None:
+            self.parent.thrust(0.0)
         self.knob = [0.0, 0.0]
 
     def on_touch_down(self, touch):
@@ -1595,6 +2065,11 @@ class ScreenButtonsLayout(Widget):
         if self.parent is not None:
             self.parent.release(action)
 
+    def thrust(self, level):
+        """Thrust power of the joystick, 0..1."""
+        if self.parent is not None:
+            self.parent.set_thrust(level, 'stick')
+
     def set_active(self, active):
         self.active = active
         self.opacity = 1 if active else 0
@@ -1622,6 +2097,7 @@ class ControlsManager(Widget):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.held = set()
+        self.analog = {}     # source ('stick', 'trigger') -> thrust power 0..1
         self.touch_buttons = ScreenButtonsLayout(
             side=self.side, edges=self.edges,
             free_corners=self.free_corners)
@@ -1642,10 +2118,24 @@ class ControlsManager(Widget):
         self.held.discard(action)
         self._apply()
 
+    def set_thrust(self, level, source='trigger'):
+        """Thrust with power `level` (0..1) from an analog `source` (a
+        trigger or a stick); the strongest source wins, and a held thrust
+        key or button still thrusts at full power."""
+        if level > 0:
+            self.analog[source] = level
+        else:
+            self.analog.pop(source, None)
+        self._apply()
+
     def _apply(self):
         spaceship = self.spaceship
-        if ('up' in self.held) != spaceship.thrust:
-            if 'up' in self.held:
+        level = 1.0 if 'up' in self.held else max(
+            self.analog.values(), default=0.0)
+        if level > 0:
+            spaceship.thrust_level = level
+        if (level > 0) != spaceship.thrust:
+            if level > 0:
                 spaceship.thrust_on()
             else:
                 spaceship.thrust_off()
@@ -2178,6 +2668,13 @@ class SpacePilgrimGame(Widget):
         self.bindings = KeyBindings(
             os.path.join(app.user_data_dir, 'keybindings.json')
             if app else None)
+        self.pad_bindings = GamepadBindings(
+            os.path.join(app.user_data_dir, 'gamepad_buttons.json')
+            if app else None)
+        self.pads = make_pad_identity()
+        self._pad_ids = {}           # stick id -> identity of a known pad
+        self._unknown_sticks = set()  # sticks that could not be identified
+        self._button_down = {}       # (stick, button) -> action at press time
         self.ship_colors = ShipColors(
             os.path.join(app.user_data_dir, 'ship_colors.json')
             if app else None)
@@ -2320,10 +2817,7 @@ class SpacePilgrimGame(Widget):
         """Send a press/release of `action` coming from `source` (a hashable
         id of the physical key/button/axis) of `device` (('keys', set) or
         ('pad', stick); None for keys of no set) to the menu or the game."""
-        in_game = not (self.settings_active or self.menu_active
-                       or self.select_active or self.results_active
-                       or self.leaderboard_active or self.name_active
-                       or self.paused or hasattr(self, 'confirm_screen'))
+        in_game = self._in_game
         controls = None
         if in_game and action != 'back':
             controls = self._controls_of(device)
@@ -2419,6 +2913,14 @@ class SpacePilgrimGame(Widget):
             else:
                 controls.release(action)
 
+    @property
+    def _in_game(self):
+        """A game is running and neither a screen nor a popup is shown."""
+        return not (self.settings_active or self.menu_active
+                    or self.select_active or self.results_active
+                    or self.leaderboard_active or self.name_active
+                    or self.paused or hasattr(self, 'confirm_screen'))
+
     def _controls_of(self, device):
         """Controls driven by `device`: in single player every keyboard set
         and gamepad drives the ship, in multiplayer only the joined slot."""
@@ -2469,6 +2971,11 @@ class SpacePilgrimGame(Widget):
 
     def show_keyboard_settings(self):
         self._show_settings_page(KeyboardSettings(bindings=self.bindings))
+
+    def show_gamepad_settings(self):
+        self._show_settings_page(GamepadSettings(
+            bindings=self.pad_bindings, pad_list=self._pad_list,
+            axis_rest=self.pads.axes))
 
     def show_touch_settings(self):
         self._show_settings_page(
@@ -2559,12 +3066,73 @@ class SpacePilgrimGame(Widget):
             stick, ('axis', stick, axis, positive), positive,
             value > JOY_AXIS_DEADZONE)
 
+    def _pad_identity(self, stick):
+        """Identity of the gamepad behind a stick id, None if SDL can not
+        say (such a pad uses the default layout)."""
+        identity = self._pad_ids.get(stick)
+        if identity is None:
+            found = self.pads.identity(stick)
+            if found is None:
+                self._unknown_sticks.add(stick)
+                return None
+            identity = self._pad_ids[stick] = found[0]
+            self._unknown_sticks.discard(stick)
+        return identity
+
+    def _pad_list(self):
+        """[(identity, name)] of the gamepads the settings page can edit."""
+        pads = list(self.pads.connected())
+        if self._unknown_sticks:
+            pads.append((None, 'Unidentified gamepad'))
+        return pads
+
+    def _waiting_pad_page(self):
+        """The gamepad settings page while it waits for a button or trigger."""
+        if (self.settings_active and self.settings.waiting
+                and isinstance(self.settings, GamepadSettings)):
+            return self.settings
+
     def _on_joy_axis(self, window, stick, axis, value):
         value = value / 32767
+        identity = self._pad_identity(stick)
+        page = self._waiting_pad_page()
+        if page is not None and page.handle_axis(identity, axis, value):
+            return
         if axis == 0:
             self._axis(stick, axis, value, 'left', 'right')
         elif axis == 1:
-            self._axis(stick, axis, value, 'up', 'down')
+            if self._in_game:
+                self._stick_thrust(stick, value)
+            else:
+                self._axis(stick, axis, value, 'up', 'down')
+        else:
+            self._trigger(stick, identity, axis, value)
+
+    def _stick_thrust(self, stick, value):
+        """In the game the stick pushed up thrusts with power: the further
+        up, the stronger (menus keep reading it as up and down)."""
+        for action in ('up', 'down'):
+            self._inputs_down.discard(('axis', stick, 1, action))
+        controls = self._controls_of(('pad', stick))
+        if controls is None:
+            return
+        level = stick_level(-value)
+        if level != controls.analog.get('stick', 0.0):
+            if level > 0:
+                self._set_touch_ui(False)
+            controls.set_thrust(level, 'stick')
+
+    def _trigger(self, stick, identity, axis, value):
+        """A trigger bound to thrust: power follows how far it is pulled."""
+        trigger = self.pad_bindings.profile(identity)['trigger']
+        if not trigger or trigger['axis'] != axis or not self._in_game:
+            return
+        controls = self._controls_of(('pad', stick))
+        if controls is not None:
+            level = trigger_level(trigger, value)
+            if level != controls.analog.get('trigger', 0.0):
+                self._set_touch_ui(False)
+                controls.set_thrust(level)
 
     def _on_joy_hat(self, window, stick, hat, value):
         x, y = value
@@ -2572,12 +3140,22 @@ class SpacePilgrimGame(Widget):
         self._axis(stick, ('hat', hat, 'y'), -y, 'up', 'down')
 
     def _on_joy_button_down(self, window, stick, button):
-        action = JOY_BUTTON_ACTIONS.get(button)
+        identity = self._pad_identity(stick)
+        page = self._waiting_pad_page()
+        if page is not None:
+            page.handle_button(identity, button)
+            return
+        # the layout of a pad applies in the game only; screens and popups
+        # keep the standard buttons, whatever it is
+        action = (self.pad_bindings.action_for(identity, button)
+                  if self._in_game else JOY_BUTTON_ACTIONS.get(button))
         if action:
+            # a rebind while the button is held must not strand the action
+            self._button_down[(stick, button)] = action
             self._joy_input(stick, ('button', stick, button), action, True)
 
     def _on_joy_button_up(self, window, stick, button):
-        action = JOY_BUTTON_ACTIONS.get(button)
+        action = self._button_down.pop((stick, button), None)
         if action:
             self._joy_input(stick, ('button', stick, button), action, False)
 
@@ -2657,6 +3235,7 @@ class SpacePilgrimGame(Widget):
         for controls in self.controls:
             if controls is not None:
                 controls.held.clear()
+                controls.analog.clear()
                 controls._apply()
                 controls.show_touch_buttons(False)
         for status in self.statuses:
@@ -2780,6 +3359,9 @@ class SpacePilgrimGame(Widget):
                 controls.show_touch_buttons(False)   # lets go of the stick
                 self.remove_widget(controls)
                 self.controls[player] = None
+                for status in self.statuses:         # no Pause button either
+                    if status.spaceship is spaceship:
+                        status.show_menu = False
                 self.results.append(PlayerResult(
                     player, spaceship.cabin, spaceship.points, self.elapsed))
         if len(self.spaceships) == 1:
