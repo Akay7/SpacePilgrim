@@ -21,14 +21,18 @@ When a game ends because every ship is out of lives, the game SHALL show a resul
 - **THEN** the main menu is shown and no results screen appears
 
 ### Requirement: Survival time
-A ship's survival time SHALL be the time in seconds from the start of the game until it lost its last life, counting only time the game was running. For a ship that is never lost it SHALL be the time until the game ended.
+A ship's survival time SHALL be the time in seconds from the start of the game until it lost its last life, counting only time the game was running. For a ship that is never lost it SHALL be the time until the game ended. For a ship that joined during a network game, the time SHALL count from when it joined. For a ship whose player left during a network game, it SHALL count until the player left.
 
 #### Scenario: Earlier loss, shorter time
 - **WHEN** player 1 loses their last life at 20 seconds and player 2 at 55 seconds
 - **THEN** the results show 20 for player 1 and 55 for player 2
 
+#### Scenario: Joined late
+- **WHEN** player 3 joins a network game at 30 seconds and loses their last life at 50 seconds
+- **THEN** the results show 20 for player 3
+
 ### Requirement: Save to the local leaderboard
-The results screen SHALL offer a "Save to leaderboard" action. Activating it SHALL store one entry for the game's top player (the only player in single player; in multiplayer the player with the most points, ties broken by longer survival) with the entered nickname, its points and survival seconds, in a file on the device. Points are the entry's rating; the time is for information only and SHALL NOT affect the ranking except to break ties. The action SHALL work once per game and then show that the score is saved. Saved entries SHALL persist across app restarts and SHALL never leave the device. If the file cannot be written the game SHALL continue and say the score could not be saved.
+The results screen SHALL offer a "Save to leaderboard" action. Activating it SHALL store one entry for the game's top player (the only player in single player; in multiplayer the player with the most points, ties broken by longer survival) with the entered nickname, its points and survival seconds, in a file on the device. Points are the entry's rating; the time is for information only and SHALL NOT affect the ranking except to break ties. The action SHALL work once per game and then show that the score is saved. Saved entries SHALL persist across app restarts. Entries SHALL only leave the device to be shared with the devices of a network game it is connected to. In a network game the action SHALL only be offered on the device of the top player. If the file cannot be written the game SHALL continue and say the score could not be saved.
 
 #### Scenario: Save in multiplayer
 - **WHEN** a four-player game ends and the player activates "Save to leaderboard"
@@ -41,6 +45,14 @@ The results screen SHALL offer a "Save to leaderboard" action. Activating it SHA
 #### Scenario: Entries survive restart
 - **WHEN** an entry was saved and the app is started again
 - **THEN** the leaderboard still lists it
+
+#### Scenario: Kept on the device outside network games
+- **WHEN** a single-player or same-screen game's score is saved and the device never connects to a network game
+- **THEN** the entry is sent nowhere
+
+#### Scenario: Older leaderboard file
+- **WHEN** the app starts with a leaderboard file written by an earlier version
+- **THEN** every entry is still listed in the same order
 
 ### Requirement: Nickname for a saved score
 Activating "Save to leaderboard" SHALL first ask for a nickname on a name entry screen with a text field, a "Save" action and a "Cancel" action. The field SHALL be prefilled with the nickname last saved on the device (or "Player" if none) and SHALL accept at most 12 characters; surrounding spaces SHALL be removed and an empty nickname SHALL be replaced by "Player". "Save" (or Enter in the field) stores the entry; "Cancel" (or Back/Escape) returns to the results screen without saving, so the score can still be saved. While the field is being typed in, game keys SHALL NOT trigger menu actions. A player with only a gamepad or remote can accept the prefilled nickname with "Save".
@@ -73,11 +85,23 @@ The main menu SHALL have a "Leaderboard" entry opening a screen that lists the s
 - **THEN** the screen says no scores are saved yet
 
 ### Requirement: Play again with the same configuration
-The results screen SHALL offer "Play again", which starts a new game with the same number of players, the same devices in the same slots and the same cabin colours, without passing through the menu, ship selection or join screen.
+The results screen SHALL offer "Play again", which starts a new game with the same number of players, the same devices in the same slots and the same cabin colours, without passing through the menu, ship selection or join screen. In a network game, "Play again" SHALL only be offered on the host. It SHALL restart the game on every device with the players whose devices are still connected. If fewer than two players remain, it SHALL return the host to its network join screen instead. A client SHALL show "Waiting for the host" in place of "Play again" and SHALL follow the host into the new game.
 
 #### Scenario: Replay multiplayer
 - **WHEN** a game with keyboard set 1, a gamepad and a touch player on the left ends and the player activates "Play again"
 - **THEN** a new game starts with those three players on the same devices and colours
+
+#### Scenario: Replay a network game
+- **WHEN** a network game with a player on the host and two players on a client ends and the host activates "Play again"
+- **THEN** a new game starts on both devices with the same three players, devices and colours
+
+#### Scenario: Client waits for the host
+- **WHEN** a network game ends
+- **THEN** each client's results screen shows "Waiting for the host" instead of "Play again", and "Save to leaderboard" and "Main menu" still work there
+
+#### Scenario: Too few players left
+- **WHEN** a two-player network game ends, the client has left, and the host activates "Play again"
+- **THEN** the host's network join screen is shown, still hosting, with its own player in their slot
 
 ### Requirement: Return to the main menu
 The results screen SHALL offer "Main menu", which shows the main menu. Results, leaderboard and menu navigation SHALL work with touch, keyboard and gamepad; Back on the results screen SHALL act as "Main menu".

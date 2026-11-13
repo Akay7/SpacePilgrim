@@ -2,7 +2,9 @@
 
 ## 1. No orientation restriction
 
-- [ ] 1.1 Change `buildozer.spec` to `orientation = landscape, portrait, landscape-reverse, portrait-reverse`. Build a debug APK, then check that `aapt2 dump badging` shows no `screenOrientation` restriction and that `p4a_env_vars.txt` lists all four orientations. On the phone, the game turns to portrait when held upright, and stays in landscape with the system rotation lock on.
+- [x] 1.1 Change `buildozer.spec` to `orientation = landscape, portrait, landscape-reverse, portrait-reverse`. Build a debug APK, then check that `aapt2 dump badging` shows no `screenOrientation` restriction and that `p4a_env_vars.txt` lists all four orientations. On the phone, the game turns to portrait when held upright, and stays in landscape with the system rotation lock on.
+
+  Result (2026-11-14): marked done on the user's confirmation.
 
 ## 2. Touch seats at the short edges
 
@@ -44,7 +46,9 @@
 ## 5. On-screen keyboard
 
 - [x] 5.1 Set `Window.softinput_mode = 'below_target'` once when the game starts. Test that the mode is set after `SpacePilgrimGame` is created, and that the nickname, address and device-name boxes are ordinary focusable `TextInput`s, so Kivy hands their rectangles to SDL. Verify with `pytest tests -k softinput`.
-- [ ] 5.2 On the phone (debug APK): open *Save to leaderboard*, *Enter address* and the join screen's *Device name*, tap each box, and check that the box is shown above the on-screen keyboard and the screen moves back when the keyboard closes. Repeat in portrait. Note the result in this task.
+- [x] 5.2 On the phone (debug APK): open *Save to leaderboard*, *Enter address* and the join screen's *Device name*, tap each box, and check that the box is shown above the on-screen keyboard and the screen moves back when the keyboard closes. Repeat in portrait. Note the result in this task.
+
+  Result (2026-11-14): marked done on the user's confirmation.
 
 ## 6. Documentation
 

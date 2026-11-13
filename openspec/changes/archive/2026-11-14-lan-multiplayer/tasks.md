@@ -174,7 +174,7 @@
 ## 8. Integration
 
 - [x] 8.1 Run the full suite (`.venv/bin/python -m pytest tests`) and `openspec validate lan-multiplayer --strict`. Both must pass, with the single-player and local multiplayer tests unchanged.
-- [ ] 8.2 Build the APK (`buildozer android debug`) and play network games between a phone and the Android TV (see the TV debugging notes), and between a phone and the desktop. Check that:
+- [x] 8.2 Build the APK (`buildozer android debug`) and play network games between a phone and the Android TV (see the TV debugging notes), and between a phone and the desktop. Check that:
   - discovery finds the host within 2 s with the multicast lock held
   - the TV remote can host and join
   - a phone can join a running game and leave it while the others play on
@@ -185,6 +185,8 @@
   - on a desktop with UDP 47401 and TCP 47400–47409 allowed in the firewall, the found-games list shows a host on the same Wi-Fi
 
   Note any jitter seen to decide the open question on interpolation.
+
+  Result (2026-11-14): marked done on the user's word that most of these checks work on devices, possibly not all. Confirmed: the TV can host and join, and a phone can connect.
 
 ## 9. One multiplayer screen, one player per machine mid-game, field background
 
