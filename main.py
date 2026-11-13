@@ -1,4 +1,4 @@
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 import colorsys
 import itertools
@@ -38,6 +38,7 @@ from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.label import Label
+from kivy.uix.textinput import TextInput
 from kivy.properties import (
     ObjectProperty, NumericProperty, BooleanProperty, StringProperty,
     ListProperty,
@@ -670,7 +671,10 @@ class ShipColors:
             pass  # keep the in-memory choice for this session
 
 
-PlayerResult = namedtuple('PlayerResult', 'slot color points survived')
+# machine: in a network game the player's machine (0 the host, else the
+# client's peer id), so only that machine offers to save the top score
+PlayerResult = namedtuple('PlayerResult', 'slot color points survived machine',
+                          defaults=(None,))
 LEADERBOARD_SIZE = 10
 NAME_LENGTH = 12
 DEFAULT_NAME = 'Player'
@@ -733,8 +737,10 @@ class Leaderboard:
             if keep_id is False:
                 return None
             ident = cls.new_id()
-        return {'id': ident,
-                'name': clean_name(entry.get('name', DEFAULT_NAME)),
+        name = entry.get('name', DEFAULT_NAME)
+        if not isinstance(name, str):
+            return None
+        return {'id': ident, 'name': clean_name(name),
                 'points': entry['points'], 'seconds': entry['seconds']}
 
     def _keep_best(self):
@@ -1434,10 +1440,16 @@ class ResultsScreen(ButtonColumn):
     # ignore presses for a moment: players are still pressing FIRE
     GUARD = 1.0
 
-    def __init__(self, results, network=None, **kwargs):
+    def __init__(self, results, network=None, can_save=True, **kwargs):
         super().__init__(**kwargs)
         self.results = results
         self.network = network     # None, 'host' or 'client'
+        # a network game's score is saved on the top player's device only
+        self.can_save = can_save
+        # kv ids are weak: keep the button even while it is not shown
+        self.save_button = self.ids.btn_save.__self__
+        if not can_save:
+            self.remove_widget(self.save_button)
         self.saved = False
         if network == 'client':    # only the host starts the next game
             self.ids.btn_again.text = 'Waiting for the host'
@@ -1465,12 +1477,12 @@ class ResultsScreen(ButtonColumn):
 
     def save_score(self):
         """Ask for a nickname; the score is stored by `store_score`."""
-        if self.saved or Clock.get_time() < self.armed_at:
+        if self.saved or not self.can_save or Clock.get_time() < self.armed_at:
             return
         self.parent.show_name_entry()
 
     def store_score(self, name):
-        if self.saved:
+        if self.saved or not self.can_save:
             return
         if self.network is not None:
             # stored once for every device of the network game, by the host
@@ -1494,9 +1506,11 @@ class ResultsScreen(ButtonColumn):
     def mark_saved(self, by):
         """A network game's score was saved, here or on device `by`."""
         self.saved = True
-        self.ids.btn_save.text = 'Saved on {}'.format(by)
-        self.ids.btn_save.disabled = True
-        self.ids.message.text = ''
+        self.save_button.text = 'Saved on {}'.format(by)
+        self.save_button.disabled = True
+        # devices without the button say it in the message line
+        self.ids.message.text = '' if self.can_save else \
+            'Score saved on {}'.format(by)
         self.selected = 0
         self.highlight()
 
@@ -2535,7 +2549,7 @@ class JoinScreen(BoxLayout):
     STRIP_WIDTH = dp(64)
 
     def __init__(self, colors, bindings, touch=True, seats=TOUCH_SIDES,
-                 lobby=None, net=None, **kwargs):
+                 lobby=None, net=None, name='', default_name='', **kwargs):
         super().__init__(spacing=dp(10), **kwargs)
         self.ship_colors = colors
         self.bindings = bindings
@@ -2571,19 +2585,50 @@ class JoinScreen(BoxLayout):
         row = BoxLayout(spacing=dp(10))
         for slot in range(MAX_PLAYERS):
             row.add_widget(self._panel(slot))
+        # above the panels: where the game is hosted, and what is missing
+        top = BoxLayout(size_hint_y=None, height=dp(24), spacing=dp(10))
+        self.info = Label(font_size='14dp', shorten=True)
+        self.message = Label(font_size='14dp', shorten=True)
+        for label in (self.info, self.message):
+            label.bind(width=lambda l, w: setattr(l, 'text_size', (w, None)))
+            top.add_widget(label)
+        middle.add_widget(top)
         middle.add_widget(row)
+        # below them: Back, and (unless this is another machine's game) the
+        # local network toggle and joining a game of another device
         bottom = BoxLayout(size_hint_y=None, height=dp(48), spacing=dp(10))
         self.back_button = Button(
-            text='Back', size_hint_x=0.3, on_press=lambda *a: self.go_back())
-        self.message = Label()
-        bottom.add_widget(self.back_button)
-        bottom.add_widget(self.message)
+            text='Back', size_hint_x=0.25, on_press=lambda *a: self.go_back())
+        self.network_button = Button(
+            size_hint_x=0.4, on_press=lambda *a: self.toggle_network())
+        self.join_network_button = Button(
+            text='Join a network game', size_hint_x=0.3,
+            on_press=lambda *a: self.join_network())
+        # how the other devices see this one; empty: `default_name`
+        self.name_field = TextInput(
+            text=name, hint_text=default_name, multiline=False,
+            write_tab=False, font_size='14dp', padding=(dp(6), dp(5)),
+            input_filter=lambda text, undo: text[
+                :max(0, DEVICE_NAME_LIMIT - len(self.name_field.text))])
+        self.name_field.bind(focus=self._name_focus)
+        name_box = BoxLayout(orientation='vertical', size_hint_x=0.25)
+        name_box.add_widget(Label(text='Device name', font_size='11dp',
+                                  size_hint_y=None, height=dp(14)))
+        name_box.add_widget(self.name_field)
+        self.bar = [self.back_button]
+        if self.mirror is None:
+            self.back_button.size_hint_x = 0.17
+            self.network_button.size_hint_x = 0.28
+            self.bar += [self.name_field, self.network_button,
+                         self.join_network_button]
+        for widget in self.bar:
+            bottom.add_widget(name_box if widget is self.name_field
+                              else widget)
+        if self.mirror is not None:
+            bottom.add_widget(Widget(size_hint_x=0.75))
         middle.add_widget(bottom)
-        if net is not None:
-            # where the game is hosted, above the panels
-            self.info = Label(size_hint_y=None, height=dp(24),
-                              font_size='14dp')
-            middle.add_widget(self.info, index=len(middle.children))
+        self.bar_device = None   # the device moving along the bottom row
+        self.bar_index = 0
         centre = (Widget(), middle, Widget())
         if four:
             # top and bottom strips between the left and right ones, the
@@ -2693,13 +2738,13 @@ class JoinScreen(BoxLayout):
         if side not in self.seats:
             return None
         if self.mirror:
-            self.mirror.touch(side=side)
+            self.mirror.touch(side)
             return None
         return self.join(('touch', side))
 
     def leave(self, slot):
         if self.mirror:
-            self.mirror.touch(slot=slot, button='leave')
+            self.mirror.panel(slot, 'leave')
             return
         self.lobby.leave(slot)
         self.refresh()
@@ -2708,14 +2753,14 @@ class JoinScreen(BoxLayout):
     def change(self, slot, step):
         """Next / previous colour for `slot`, until the player is ready."""
         if self.mirror:
-            self.mirror.touch(slot=slot, button='prev' if step < 0 else 'next')
+            self.mirror.panel(slot, 'prev' if step < 0 else 'next')
             return
         if self.lobby.change(slot, step):
             self.refresh()
 
     def toggle_ready(self, slot):
         if self.mirror:
-            self.mirror.touch(slot=slot, button='ready')
+            self.mirror.panel(slot, 'ready')
             return
         if self.lobby.toggle_ready(slot):
             self.refresh()
@@ -2728,6 +2773,10 @@ class JoinScreen(BoxLayout):
     def handle(self, device, action):
         """A press of `action` from `device` (None: Escape)."""
         slot = self.slot_of(device)
+        if device is not None and (device == self.bar_device or (
+                action == 'down' and slot is None)):
+            self._bar_action(device, action)
+            return
         if self.mirror:
             # the host decides; the client only lights up its own slot
             if slot is None and action == 'back':
@@ -2756,6 +2805,69 @@ class JoinScreen(BoxLayout):
         elif ((kind == 'keys' and action == 'up')
               or (kind == 'pad' and action == 'back')):
             self.leave(slot)
+
+    # ---- the bottom row: Back, local network, join a network game --------
+
+    def _bar_action(self, device, action):
+        """A device that has not joined pressed Down: it moves along the
+        bottom row (Left / Right), presses a button (FIRE) or goes back up
+        to joining (Up)."""
+        if self.bar_device is None:
+            self.bar_device, self.bar_index = device, 0
+        elif action in ('left', 'right'):
+            step = -1 if action == 'left' else 1
+            self.bar_index = (self.bar_index + step) % len(self.bar)
+        elif action == 'fire':
+            button = self.bar[self.bar_index]
+            self._leave_bar()
+            if button is self.name_field:
+                button.focus = not button.disabled
+            else:
+                button.dispatch('on_press')
+            return
+        elif action == 'up':
+            self._leave_bar()
+            return
+        elif action == 'back':
+            self._leave_bar()
+            self.go_back()
+            return
+        self._highlight_bar()
+
+    def _leave_bar(self):
+        self.bar_device = None
+        self._highlight_bar()
+
+    def _highlight_bar(self):
+        for i, button in enumerate(self.bar):
+            on = self.bar_device is not None and i == self.bar_index
+            # a lighter blue on the name box keeps its text readable
+            lit = ((0.6, 0.85, 1, 1) if button is self.name_field
+                   else (0.3, 0.7, 1, 1))
+            button.background_color = lit if on else (1, 1, 1, 1)
+
+    @property
+    def typing(self):
+        return self.name_field.focus
+
+    @property
+    def typed_name(self):
+        """The device name typed in ('' for the default), or None on a
+        client's screen, which has no name box."""
+        return self.name_field.text.strip() if self.mirror is None else None
+
+    def _name_focus(self, field, focus):
+        if not focus and self.parent is not None:
+            self.parent.remember_name()
+
+    def toggle_network(self):
+        """Open the game to the local network, or close it again."""
+        if self.parent is not None:
+            self.parent.set_hosting(self.net is None)
+
+    def join_network(self):
+        if self.parent is not None:
+            self.parent.show_network()
 
     def flash(self, slot):
         """Light up the slot of the device that was just used."""
@@ -2850,6 +2962,11 @@ class JoinScreen(BoxLayout):
             for name in ('device', 'preview', 'colour_row', 'action_row',
                          'hint'):
                 panel.add_widget(w[name])
+        self.name_field.disabled = self.net is not None
+        self.network_button.text = 'Local network: {}'.format(
+            'On' if self.net is not None else 'Off')
+        if self.net is None:
+            self.info.text = ''
         joined = self.joined
         if not joined:
             self.message.text = 'Press FIRE to join'
@@ -2864,6 +2981,7 @@ class JoinScreen(BoxLayout):
 # ---- network game ------------------------------------------------------------
 
 NET_POLL = 1 / 30     # seconds between polls of the network outside a frame
+DEVICE_NAME_LIMIT = 24   # characters of a device name typed in
 
 
 def make_browser():
@@ -2937,11 +3055,13 @@ class MulticastLock:
 
 
 class NetworkSettings:
-    """The host address typed last, as JSON."""
+    """The host address typed last and the device name chosen ('' for the
+    default), as JSON."""
 
     def __init__(self, path=None):
         self.path = path
         self.last_address = ''
+        self.device_name = ''
         self.load()
 
     def default_address(self):
@@ -2960,9 +3080,14 @@ class NetworkSettings:
                 data = json.load(f)
         except (OSError, ValueError):
             return
-        address = data.get('last_address') if isinstance(data, dict) else None
+        if not isinstance(data, dict):
+            return
+        address = data.get('last_address')
         if isinstance(address, str) and len(address) <= 64:
             self.last_address = address
+        name = data.get('device_name')
+        if isinstance(name, str) and len(name) <= DEVICE_NAME_LIMIT:
+            self.device_name = name.strip()
 
     def save(self):
         if not self.path:
@@ -2970,14 +3095,15 @@ class NetworkSettings:
         try:
             os.makedirs(os.path.dirname(self.path) or '.', exist_ok=True)
             with open(self.path, 'w') as f:
-                json.dump({'last_address': self.last_address}, f)
+                json.dump({'last_address': self.last_address,
+                           'device_name': self.device_name}, f)
         except OSError:
             pass
 
 
 class NetworkScreen(ButtonColumn):
-    """Network game: host one, join one announced on this Wi-Fi, or give a
-    host's address. The list follows the announcements as they come."""
+    """Join a network game: one announced on this Wi-Fi, or a host given by
+    its address. The list follows the announcements as they come."""
     ROW = dp(44)
 
     def __init__(self, browser, message='', **kwargs):
@@ -3022,10 +3148,8 @@ class NetworkScreen(ButtonColumn):
                   if buttons else None)
         self.clear_widgets()
         game = lambda: self.parent       # noqa: E731 - the SpacePilgrimGame
-        widgets = [Label(text='Network game', font_size='24dp',
-                         size_hint_y=None, height=dp(36)),
-                   self._button('host', 'Host a game',
-                                lambda: game().host_game())]
+        widgets = [Label(text='Join a network game', font_size='24dp',
+                         size_hint_y=None, height=dp(36))]
         for found in self.games:
             widgets.append(self._button(
                 ('game',) + found.key, self.game_label(found),
@@ -3092,7 +3216,9 @@ class AddressScreen(ButtonColumn):
 class FieldView(Widget):
     """A client's view of the host's field: the host's window scaled to fit
     this one, keeping its proportions and centred, with a faint outline
-    where the field ends. Children are placed in the host's coordinates."""
+    where the field ends. Children are placed in the host's coordinates.
+    The field has its own nebula and scrolling debris, so the background
+    covers the field only, as on the host; outside it the screen is black."""
 
     def __init__(self, field, **kwargs):
         super().__init__(**kwargs)
@@ -3103,11 +3229,14 @@ class FieldView(Widget):
             PushMatrix()
             self._translate = Translate()
             self._scale = Scale()
-        with self.canvas:
+        with self.canvas.after:
             Color(1, 1, 1, 0.3)
             self._outline = Line(width=1)
-        with self.canvas.after:
             PopMatrix()
+        self.nebula = Nebula()
+        self.debris = AnimatedBackground()
+        self.add_widget(self.nebula)
+        self.add_widget(self.debris)
         Window.bind(size=self._fit)
         self._fit()
 
@@ -3127,6 +3256,7 @@ class FieldView(Widget):
         self._scale.xyz = (s, s, 1)
         self._outline.width = max(1.0, dp(1)) / s
         self._outline.rectangle = (0, 0, w, h)
+        self.nebula.size = self.debris.size = (w, h)
 
     def to_screen(self, x, y):
         return (self.offset[0] + self.scale * x,
@@ -3134,6 +3264,7 @@ class FieldView(Widget):
 
     def detach(self):
         Window.unbind(size=self._fit)
+        self.debris.pause()
 
 
 class RemoteShip:
@@ -3256,17 +3387,19 @@ class NetHost:
     announcement, and the lobby kept for the whole session."""
     role = 'host'
 
-    def __init__(self, game, session, announcer, address):
+    def __init__(self, game, session, announcer, address, lobby=None):
         self.game = game
         self.session = session
         self.announcer = announcer
         self.address = address
         self.name = session.name
-        self.lobby = Lobby(game.ship_colors)
+        # the join screen's players stay when it opens to the network
+        self.lobby = lobby if lobby is not None else Lobby(game.ship_colors)
         self.lobby.names[0] = self.name
         self.phase = 'lobby'
         self.game_id = None
         self.results = []
+        self.saver = -1          # the machine that may save the top score
         self.saved = {}          # game id -> machine that saved its score
         self.booms = []          # explosions since the last snapshot
         self.closed = False
@@ -3326,7 +3459,9 @@ class NetHost:
             self.device_action(('net', peer, message['device']),
                                message['action'])
         elif kind == 'touch':
-            self.touch(peer, message)
+            self.touch(peer, message['side'])
+        elif kind == 'panel':
+            self.panel(peer, message['slot'], message['button'])
         elif kind in ('ctl', 'fire'):
             game.net_control(peer, message)
         elif kind == 'pause':
@@ -3337,7 +3472,7 @@ class NetHost:
                 game.resume()
         elif kind == 'save':
             self.save(message['game'], message['name'],
-                      self.lobby.names.get(peer, ''))
+                      self.lobby.names.get(peer, ''), peer)
         # the other types only go from the host to the clients
 
     def join_screen(self):
@@ -3355,23 +3490,23 @@ class NetHost:
         elif self.phase == 'game' and action == 'fire':
             self.game.net_join(device)
 
-    def touch(self, peer, message):
-        """A client's touch strip (join) or panel button."""
-        side, slot, button = message['side'], message['slot'], message['button']
-        if side is not None:
-            device = ('net', peer, ('touch', side))
-            if self.phase == 'lobby':
-                select = self.join_screen()
-                if select is not None:
-                    slot = select.join(device)
-                    if slot is not None:
-                        select.flash(slot)
-            elif self.phase == 'game':
-                self.game.net_join(device)
+    def touch(self, peer, side):
+        """A client's touch player tapped the strip at `side`: join."""
+        device = ('net', peer, ('touch', side))
+        if self.phase == 'game':
+            self.game.net_join(device)
             return
         select = self.join_screen()
-        if (self.phase != 'lobby' or select is None or slot is None
-                or button is None or slot not in self.lobby.peer_slots(peer)):
+        if self.phase == 'lobby' and select is not None:
+            slot = select.join(device)
+            if slot is not None:
+                select.flash(slot)
+
+    def panel(self, peer, slot, button):
+        """A panel button of a slot of the client's."""
+        select = self.join_screen()
+        if (self.phase != 'lobby' or select is None
+                or slot not in self.lobby.peer_slots(peer)):
             return
         select.flash(slot)
         if button in ('prev', 'next'):
@@ -3427,14 +3562,13 @@ class NetHost:
                 'elapsed': self.game.elapsed}
 
     def over_message(self):
-        return {'t': 'over', 'game': self.game_id, 'results': [
-            [r.slot, r.color, int(r.points), round(max(r.survived, 0), 2)]
-            for r in self.results]}
+        return {'t': 'over', 'game': self.game_id, 'saver': self.saver,
+                'results': [[r.slot, r.color, int(r.points),
+                             round(max(r.survived, 0), 2)]
+                            for r in self.results]}
 
     def lb_message(self):
-        return {'t': 'lb', 'entries': [
-            [e['id'], e['name'], e['points'], e['seconds']]
-            for e in self.game.leaderboard.entries]}
+        return {'t': 'lb', 'entries': self.game.leaderboard.entries}
 
     # ---- the game ------------------------------------------------------------
 
@@ -3477,6 +3611,11 @@ class NetHost:
     def game_over(self, results):
         self.results = list(results)
         self.game_id = uuid.uuid4().hex[:12]
+        # only the machine of the top player saves the score (none when
+        # that player's machine has left)
+        best = top_result(self.results).machine
+        here = best == 0 or best in self.session.clients
+        self.saver = best if best is not None and here else -1
         self.set_phase('results')
         self.send(self.over_message())
         self.send_lobby()
@@ -3499,11 +3638,13 @@ class NetHost:
         board = self.game.leaderboard
         board.last_name = clean_name(name)
         board.save()
-        self.save(self.game_id, name, self.name)
+        self.save(self.game_id, name, self.name, 0)
 
-    def save(self, game_id, name, by):
-        """Store the game's top player once, on every device."""
-        if game_id != self.game_id or self.phase != 'results':
+    def save(self, game_id, name, by, peer):
+        """Store the game's top player once, on every device; only the
+        machine of that player (`peer`, 0 the host) may."""
+        if (game_id != self.game_id or self.phase != 'results'
+                or peer != self.saver):
             return
         if game_id not in self.saved:
             best = top_result(self.results)
@@ -3575,9 +3716,7 @@ class NetClient:
         self.peer = message['peer']
         self.host_name = message['name']
         self.phase = message['phase']
-        self.send({'t': 'lb', 'entries': [
-            [e['id'], e['name'], e['points'], e['seconds']]
-            for e in self.game.leaderboard.entries]})
+        self.send({'t': 'lb', 'entries': self.game.leaderboard.entries})
         if self.phase == 'game':
             self.game.net_waiting('Joining the game…')
         else:
@@ -3643,9 +3782,11 @@ class NetClient:
     def act(self, device, action):
         self.send({'t': 'act', 'device': device, 'action': action})
 
-    def touch(self, side=None, slot=None, button=None):
-        self.send({'t': 'touch', 'side': side, 'slot': slot,
-                   'button': button})
+    def touch(self, side):
+        self.send({'t': 'touch', 'side': side})
+
+    def panel(self, slot, button):
+        self.send({'t': 'panel', 'slot': slot, 'button': button})
 
     def paused(self, paused):
         self.send({'t': 'pause' if paused else 'resume'})
@@ -3671,36 +3812,63 @@ class NetClient:
             self.session.close('menu')
 
 
-class AnimatedBackground(Widget):
-    background = ObjectProperty()
-    uv_pos_x_px = NumericProperty()
+class Nebula(Widget):
+    """The nebula picture stretched over the whole widget."""
+    SOURCE = 'images/nebula_blue.png'
 
     def __init__(self, **kwargs):
-        super(AnimatedBackground, self).__init__(**kwargs)
-        # ToDo: move link to image to kv file
-        texture = Image('images/debris.png').texture
-        texture.wrap = 'repeat'
-        setattr(self, 'background', texture)
-        self.animate()
-        self.bind(uv_pos_x_px=self.change_uv_pos)
+        super().__init__(**kwargs)
+        with self.canvas:
+            Color(1, 1, 1, 1)
+            self._rect = Rectangle(source=self.SOURCE)
+        self.bind(pos=self._redraw, size=self._redraw)
+        self._redraw()
 
-    def change_uv_pos(self, called_by, value):
-        self.background.uvpos = (
-            value / self.background.size[0],
-            self.background.uvpos[1]
-        )
-        self.property('background').dispatch(self)
+    def _redraw(self, *args):
+        self._rect.pos, self._rect.size = self.pos, self.size
 
+
+class AnimatedBackground(Widget):
+    """The debris picture at its own size and proportions (640 x 480 px),
+    repeated over the widget from its bottom-left corner and scrolling
+    left: never stretched, whatever the shape of the screen. `shift` is how
+    many pixels the pattern has moved left."""
+    SOURCE = 'images/debris.png'
     DURATION = 15   # seconds for one trip over the picture
+    shift = NumericProperty()
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.texture = Image(self.SOURCE).texture
+        self.texture.wrap = 'repeat'
+        with self.canvas:
+            Color(1, 1, 1, 1)
+            self._rect = Rectangle(texture=self.texture)
+        self.bind(pos=self._redraw, size=self._redraw, shift=self._redraw)
+        self._redraw()
+        self.animate()
+
+    def _redraw(self, *args):
+        """Texture coordinates beyond the picture repeat it, in whichever
+        direction the texture runs (image textures are stored upside down).
+        The coordinates belong to this rectangle, so debris layers sharing
+        the cached texture do not move each other."""
+        width, height = self.texture.size
+        u0, v0, _, _, u1, v1, _, _ = self.texture.tex_coords
+        du, dv = (u1 - u0) / width, (v1 - v0) / height
+        left = u0 + du * self.shift
+        right = left + du * self.width
+        top = v0 + dv * self.height
+        self._rect.pos, self._rect.size = self.pos, self.size
+        self._rect.tex_coords = (left, v0, right, v0, right, top, left, top)
 
     def animate(self, *args):
-        self.uv_pos_x_px = 0
+        self.shift = 0
         self._scroll(self.DURATION)
 
     def _scroll(self, duration):
         self.animation = Animation(
-            uv_pos_x_px=self.background.size[0], t='linear',
-            duration=duration)
+            shift=self.texture.width, t='linear', duration=duration)
         self.animation.bind(on_complete=self.animate)
         self.animation.start(self)
 
@@ -3709,8 +3877,7 @@ class AnimatedBackground(Widget):
 
     def resume(self):
         """Go on from where the picture stopped."""
-        width = self.background.size[0]
-        self._scroll(self.DURATION * (1 - self.uv_pos_x_px / width))
+        self._scroll(self.DURATION * (1 - self.shift / self.texture.width))
 
 
 class SpacePilgrimGame(Widget):
@@ -3769,6 +3936,7 @@ class SpacePilgrimGame(Widget):
         self.mirror_ships, self.mirror_asteroids, self.mirror_shots = {}, {}, {}
         self.network_settings = NetworkSettings(
             os.path.join(app.user_data_dir, 'network.json') if app else None)
+        self._default_name = None
         self.multicast = MulticastLock()
         self.pad_watch = watch_gamepads()
         Window.bind(
@@ -4158,7 +4326,8 @@ class SpacePilgrimGame(Widget):
         else:
             self.select = JoinScreen(self.ship_colors, self.bindings,
                                      touch=self.has_touch,
-                                     seats=touch_seats())
+                                     seats=touch_seats(),
+                                     **self._name_args())
         self.add_widget(self.select)
 
     def start_selected(self):
@@ -4173,6 +4342,7 @@ class SpacePilgrimGame(Widget):
         self.game_start(slots=self.select.slots)
 
     def close_ship_select(self):
+        self.remember_name()
         if self.net is not None:      # leaves (or ends) the network game
             self.remove_widget(self.select)
             del self.select
@@ -4203,6 +4373,13 @@ class SpacePilgrimGame(Widget):
             if key == 27:
                 (self.name_screen if self.name_active
                  else self.address_screen).cancel()
+            return
+        if self.select_active and getattr(self.select, 'typing', False):
+            # typing the device name: the keys must not join players;
+            # Escape (like Enter) is done with it
+            self._back_from_menu = False
+            if key == 27:
+                self.select.name_field.focus = False
             return
         # Kivy dispatches on_keyboard right after this handler, by which time
         # Back may already have closed the game or settings; remember where
@@ -4339,10 +4516,40 @@ class SpacePilgrimGame(Widget):
 
     # ---- network game ------------------------------------------------------
 
+    def default_device_name(self):
+        """The model (Android) or host name, looked up once."""
+        if self._default_name is None:
+            self._default_name = device_name()
+        return self._default_name
+
+    def device_name(self):
+        """How the other devices of a network game see this one."""
+        return (self.network_settings.device_name
+                or self.default_device_name())
+
+    def _name_args(self):
+        return {'name': self.network_settings.device_name,
+                'default_name': self.default_device_name()}
+
+    def remember_name(self):
+        """Keep the device name typed on the join screen."""
+        select = getattr(self, 'select', None)
+        typed = getattr(select, 'typed_name', None)
+        if typed is not None and typed != self.network_settings.device_name:
+            self.network_settings.device_name = typed
+            self.network_settings.save()
+
     def show_network(self, message=''):
-        """The network screen: host, join a found game or give an address."""
+        """Join a network game: a found one or one given by its address. Its
+        Back returns to the join screen."""
+        self.remember_name()
         if self.menu_active:
             self.remove_widget(self.menu)
+        self.net_end()
+        for name in ('select', 'results_screen'):
+            if hasattr(self, name):
+                self.remove_widget(getattr(self, name))
+                delattr(self, name)
         self._drop_network_screen()
         self.multicast.acquire()
         try:
@@ -4361,32 +4568,52 @@ class SpacePilgrimGame(Widget):
         self.multicast.release()
 
     def close_network(self):
-        self.show_menu()
-
-    def host_game(self):
-        """"Host a game": the join screen, open to the network."""
-        if self.net is not None:
-            return
-        name = device_name()
-        session = None
-        try:
-            session = make_host_session(name)
-            announcer = make_announcer(name, session.port)
-        except OSError as e:
-            if session is not None:
-                session.close()
-            self.network_screen.set_message(
-                'Could not host a game: {}'.format(e.strerror or e))
-            return
+        """Back from joining a network game: the multiplayer join screen."""
+        self.net_end()
         self._drop_network_screen()
-        self.net = NetHost(self, session, announcer, network.local_address())
-        self.show_host_join()
+        self.show_ship_select(2)
+
+    def set_hosting(self, on):
+        """The join screen's "Local network" toggle: open the game to the
+        devices of the local network (the players already joined stay), or
+        close it again (players of other machines leave)."""
+        select = self.select
+        if on and self.net is None:
+            select.name_field.focus = False
+            self.remember_name()
+            name = self.device_name()
+            session = None
+            try:
+                session = make_host_session(name)
+                announcer = make_announcer(name, session.port)
+            except OSError as e:
+                if session is not None:
+                    session.close()
+                select.message.text = 'Could not open to the network: {}'.format(
+                    e.strerror or e)
+                return
+            self.net = NetHost(self, session, announcer,
+                               network.local_address(), lobby=select.lobby)
+            select.net = self.net
+            select.info.text = self.net.info
+            select.on_change = self.net.send_lobby
+        elif not on and self._hosting:
+            lobby = self.net.lobby
+            self.net_end()
+            for slot in range(MAX_PLAYERS):
+                if is_remote(lobby.slots[slot]):
+                    lobby.leave(slot)
+            lobby.names = {}
+            select.net = None
+            select.on_change = None
+        select.refresh()
 
     def show_host_join(self):
         self._drop_screens()
         self.select = JoinScreen(
             self.ship_colors, self.bindings, touch=self.has_touch,
-            seats=touch_seats(), lobby=self.net.lobby, net=self.net)
+            seats=touch_seats(), lobby=self.net.lobby, net=self.net,
+            **self._name_args())
         self.select.info.text = self.net.info
         self.select.on_change = self.net.send_lobby
         self.add_widget(self.select)
@@ -4421,7 +4648,7 @@ class SpacePilgrimGame(Widget):
         if self.net is not None:
             return
         try:
-            session = make_client_session(host, port, device_name())
+            session = make_client_session(host, port, self.device_name())
         except OSError:
             self.net_failed('unreachable')
             return
@@ -4500,17 +4727,19 @@ class SpacePilgrimGame(Widget):
         """A device that has not joined pressed FIRE during a network game."""
         if self._joined_client:
             if device[0] == 'touch':
-                self.net.touch(side=device[1])
+                self.net.touch(device[1])
             else:
                 self.net.act(device, 'fire')
             return
         if not self._hosting or self.net.phase != 'game':
             return
         lobby = self.net.lobby
-        slot = lobby.slot_of(device)
-        if slot is not None:
-            if lobby.out[slot]:
-                self._deny(device, 'out')
+        if lobby.slot_of(device) is not None:
+            return                         # already plays (or played)
+        if self._machine_slots(device):
+            # a machine with a player in this game brings no more: whoever
+            # joined alone plays alone, and a lost ship stays lost
+            self._deny(device, 'out')
             return
         slot = lobby.join(device)
         if slot is None:
@@ -4523,6 +4752,24 @@ class SpacePilgrimGame(Widget):
         self._show_touch_controls()
         self.net.send_lobby()
         self.update_prompt()
+
+    def _machine_of(self, slot):
+        """The host: the machine of the player in `slot` (0 for the host's
+        own devices, else the client's peer id); None outside a network
+        game."""
+        if not self._hosting or self.slots is None or slot >= len(self.slots):
+            return None
+        device = self.slots[slot]
+        if device is None:
+            return None
+        return device[1] if is_remote(device) else 0
+
+    def _machine_slots(self, device):
+        """The slots of this game held by the machine of `device`."""
+        peer = device[1] if is_remote(device) else None
+        return [i for i, d in enumerate(self.net.lobby.slots)
+                if d is not None and (d[1] == peer if is_remote(d)
+                                      else peer is None)]
 
     def _deny(self, device, reason):
         if is_remote(device):
@@ -4552,7 +4799,8 @@ class SpacePilgrimGame(Widget):
         if ship is not None:
             self.results.append(PlayerResult(
                 slot, ship.cabin, ship.points,
-                self.elapsed - self.joined_at.get(slot, 0.0)))
+                self.elapsed - self.joined_at.get(slot, 0.0),
+                self._machine_of(slot)))
             self.remove_spaceship(ship)
         self.net.lobby.leave(slot)
         self.joined_at.pop(slot, None)
@@ -4590,7 +4838,7 @@ class SpacePilgrimGame(Widget):
             ship.stop_rotation()
 
     def update_prompt(self):
-        """Show how to join while no device of this machine plays."""
+        """Show how to join while this machine has no player in the game."""
         prompt = getattr(self, 'prompt', None)
         if not self.in_net_game or self.net is None:
             return
@@ -4599,9 +4847,9 @@ class SpacePilgrimGame(Widget):
                 touch_seats(), lambda side: self.net_join(('touch', side)))
             self.add_widget(prompt)
         lobby = self.net.lobby
-        playing = any(d and not is_remote(d) and not lobby.out[i]
-                      for i, d in enumerate(lobby.slots))
-        prompt.show(not playing, free=lobby.free, touch=self.has_touch,
+        # only a machine without a player in this game may still join
+        mine = any(d and not is_remote(d) for d in lobby.slots)
+        prompt.show(not mine, free=lobby.free, touch=self.has_touch,
                     taken={touch_seat(d) for d in lobby.slots})
 
     # ---- a client's game: the host's world, drawn here ----------------------
@@ -4627,6 +4875,7 @@ class SpacePilgrimGame(Widget):
         self.joined_at = {}
         self._layout = self._seat_layout(self.slots)
         self.field_view = FieldView(message['field'])
+        self._screen_background(False)
         self.add_widget(self.field_view)
         self._inputs_down.clear()
         self.update_prompt()
@@ -4730,7 +4979,9 @@ class SpacePilgrimGame(Widget):
         results = [PlayerResult(*r) for r in message['results']]
         self.end_game()
         self._drop_screens()
-        self.results_screen = ResultsScreen(results, network='client')
+        self.results_screen = ResultsScreen(
+            results, network='client',
+            can_save=message['saver'] == self.net.peer)
         self.add_widget(self.results_screen)
 
     def score_saved(self, game_id, by):
@@ -4793,7 +5044,8 @@ class SpacePilgrimGame(Widget):
         if self._hosting:
             self.net.game_over(results)
         self.results_screen = ResultsScreen(
-            results, network=self.net.role if self.net else None)
+            results, network=self.net.role if self.net else None,
+            can_save=not self._hosting or self.net.saver == 0)
         self.add_widget(self.results_screen)
 
     def play_again(self):
@@ -4807,8 +5059,22 @@ class SpacePilgrimGame(Widget):
             partial(self.remove_shot, shot), shot.lifetime)
 
     def background_widget(self):
+        """The scrolling debris: a client's is in its field view."""
+        view = getattr(self, 'field_view', None)
+        if view is not None:
+            return view.debris
         return next((c for c in self.children
                      if isinstance(c, AnimatedBackground)), None)
+
+    def _screen_background(self, shown):
+        """The full-screen nebula and debris: hidden while a client draws
+        the host's field (which has its own), shown again after."""
+        for child in self.children:
+            if isinstance(child, (Nebula, AnimatedBackground)):
+                if child.opacity != (1 if shown else 0):
+                    child.opacity = 1 if shown else 0
+                    if isinstance(child, AnimatedBackground):
+                        (child.resume if shown else child.pause)()
 
     def pause(self, from_net=False):
         """Freeze the world and show the pause screen. In a network game
@@ -4934,6 +5200,7 @@ class SpacePilgrimGame(Widget):
                 widget.detach()
                 self.remove_widget(widget)
                 delattr(self, name)
+        self._screen_background(True)
         self.mirror_ships, self.mirror_asteroids, self.mirror_shots = {}, {}, {}
 
     def update(self, dt):
@@ -4984,7 +5251,8 @@ class SpacePilgrimGame(Widget):
                         status.show_menu = False
                 self.results.append(PlayerResult(
                     player, spaceship.cabin, spaceship.points,
-                    self.elapsed - self.joined_at.get(player, 0.0)))
+                    self.elapsed - self.joined_at.get(player, 0.0),
+                    self._machine_of(player)))
                 if self._hosting:     # out until the game ends
                     self.net.lobby.out[player] = True
                     self.net.send_lobby()

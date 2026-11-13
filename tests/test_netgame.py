@@ -15,6 +15,7 @@ import network
 from main import SpacePilgrimGame
 
 KEY_SPACE, KEY_ENTER, KEY_ESC, KEY_DOWN = 32, 13, 27, 274
+KEY_UP, KEY_RIGHT = 273, 275
 KEY_A, KEY_D = ord('a'), ord('d')
 SC_A, SC_D = 4, 7
 
@@ -57,15 +58,19 @@ class Env:
         return game
 
     def host(self):
+        """Multiplayer, then "Local network: On"."""
         game = self.new_game()
-        game.show_network()
-        game.host_game()
-        assert game.select_active
+        game.show_ship_select(2)
+        game.select.network_button.dispatch('on_press')
+        assert game.select_active and game._hosting
         return game
 
     def client(self, host):
+        """Multiplayer, "Join a network game", then the host."""
         game = self.new_game()
-        game.show_network()
+        game.show_ship_select(2)
+        game.select.join_network_button.dispatch('on_press')
+        assert game.network_active
         game.join_game('127.0.0.1', host.net.session.port, 'TV')
         self.pump()
         return game
@@ -132,11 +137,10 @@ def started(env, players=('host', 'client')):
 
 # ---- menu ---------------------------------------------------------------------
 
-def test_menu_has_network_game_and_fits_a_phone(env):
+def test_menu_has_one_multiplayer_entry_and_fits_a_phone(env):
     game = env.new_game()
     assert [b.text for b in game.menu.buttons] == [
-        'Single player', 'Multiplayer', 'Network game', 'Leaderboard',
-        'Settings', 'Exit']
+        'Single player', 'Multiplayer', 'Leaderboard', 'Settings', 'Exit']
     menu = game.menu
     assert menu.height <= dp(360) - dp(10)
     for message in ('', 'The host ended the game'):
@@ -155,22 +159,53 @@ def _labels(screen):
 def test_network_screen_opens_by_keyboard_and_lists_actions(env):
     game = env.new_game()
     press(game, KEY_DOWN)
-    press(game, KEY_DOWN)
+    press(game, KEY_ENTER)                 # Multiplayer: the join screen
+    assert game.select_active
+    press(game, KEY_DOWN)                  # down to the bottom row: Back
+    assert game.select.bar_device == ('keys', 0)
+    press(game, KEY_RIGHT)                 # Device name
+    press(game, KEY_RIGHT)                 # Local network
+    press(game, KEY_RIGHT)                 # Join a network game
     press(game, KEY_ENTER)
-    assert game.network_active and not game.menu_active
+    assert game.network_active and not game.select_active
     screen = game.network_screen
-    assert _labels(screen) == ['Host a game', 'Enter address', 'Back']
+    assert _labels(screen) == ['Enter address', 'Back']
     assert screen.selected == 0
     texts = [c.text for c in screen.children if isinstance(c, main.Label)]
     assert 'Searching for games on this Wi-Fi…' in texts
 
 
-def test_network_screen_opens_with_a_gamepad(env):
+def _hat(game, x, y):
+    game._on_joy_hat(None, 0, 0, (x, y))
+    game._on_joy_hat(None, 0, 0, (0, 0))
+
+
+def test_join_screen_bottom_row_with_a_gamepad(env):
     game = env.new_game()
-    game.menu.move(2)
-    game._on_joy_button_down(None, 0, 0)
-    game._on_joy_button_up(None, 0, 0)
-    assert game.network_active
+    game.show_ship_select(2)
+    select = game.select
+    _hat(game, 0, -1)                       # down: the bottom row
+    _hat(game, 1, 0)                        # right: Device name
+    _hat(game, 1, 0)                        # right: Local network
+    assert select.bar_index == 2
+    assert select.network_button.background_color == [0.3, 0.7, 1, 1]
+    pad_fire(game)                          # turns it on, does not join
+    assert game._hosting and select.slots == [None] * 4
+    assert select.network_button.text == 'Local network: On'
+    pad_fire(game)                          # back up: FIRE joins again
+    assert select.slots[0] == ('pad', 0)
+    _hat(game, 0, -1)                       # a joined pad stays in its slot
+    assert select.bar_device is None
+
+
+def test_join_screen_up_leaves_the_bottom_row(env):
+    game = env.new_game()
+    game.show_ship_select(2)
+    press(game, KEY_DOWN)
+    press(game, KEY_UP)
+    assert game.select.bar_device is None
+    press(game, KEY_SPACE)                  # FIRE joins again
+    assert game.select.slots[0] == ('keys', 0)
 
 
 def test_network_screen_lists_found_games(env):
@@ -184,26 +219,27 @@ def test_network_screen_lists_found_games(env):
     ]
     env.browser.games = found
     screen.poll()
-    assert _labels(screen) == ['Host a game', 'Pixel 8 · 2/4',
-                               'TV · in game · 3/4', 'Enter address', 'Back']
+    assert _labels(screen) == ['Pixel 8 · 2/4', 'TV · in game · 3/4',
+                               'Enter address', 'Back']
     old = [c for c in screen.children if getattr(c, 'text', '') ==
            'Old · other version']
     assert old and old[0].disabled
     old[0].dispatch('on_press')          # cannot be joined
     assert game.net is None
-    screen.move(2)                        # keeps the selection on "TV"
+    assert screen.buttons[screen.selected].text == 'Enter address'  # kept
+    screen.move(-1)                       # "TV" stays selected below
     env.browser.games = found[1:]
     screen.poll()
-    assert _labels(screen) == ['Host a game', 'TV · in game · 3/4',
-                               'Enter address', 'Back']
+    assert _labels(screen) == ['TV · in game · 3/4', 'Enter address', 'Back']
     assert screen.buttons[screen.selected].text == 'TV · in game · 3/4'
 
 
-def test_network_screen_escape_returns_to_menu(env):
+def test_network_screen_escape_returns_to_the_join_screen(env):
     game = env.new_game()
     game.show_network()
     press(game, KEY_ESC)
-    assert game.menu_active and not game.network_active
+    assert not game.network_active and not game.menu_active
+    assert isinstance(game.select, main.JoinScreen) and not game.select.mirror
     assert env.browser.closed
 
 
@@ -211,8 +247,7 @@ def test_network_screen_escape_returns_to_menu(env):
 
 def _enter_address(game, text):
     game.show_network()
-    game.network_screen.move(1)
-    press(game, KEY_ENTER)                # "Enter address"
+    press(game, KEY_ENTER)                # "Enter address" (no games found)
     assert game.address_active
     game.address_screen.ids.field.text = text
     game.address_screen.accept()
@@ -236,6 +271,84 @@ def test_address_prefilled_from_own_network_then_last(env, tmp_path):
     game.show_address()
     assert game.address_screen.ids.field.text == '10.0.0.9:5000'
 
+
+
+# ---- the device name ----------------------------------------------------------
+
+def test_device_name_box_defaults_to_the_model(env):
+    game = env.new_game()
+    game.show_ship_select(2)
+    field = game.select.name_field
+    assert field.text == '' and field.hint_text == 'TV'
+    game.select.network_button.dispatch('on_press')
+    assert game.net.session.name == 'TV' and env.announcers[-1].name == 'TV'
+
+
+def test_typed_device_name_is_used_for_hosting_and_kept(env, tmp_path):
+    path = str(tmp_path / 'net.json')
+    game = env.new_game()
+    game.network_settings = main.NetworkSettings(path)
+    game.show_ship_select(2)
+    game.select.name_field.text = '  Living room  '
+    game.select.network_button.dispatch('on_press')
+    assert game.net.session.name == 'Living room'
+    assert env.announcers[-1].name == 'Living room'
+    assert game.net.lobby.names[0] == 'Living room'
+    assert game.select.name_field.disabled          # fixed while hosting
+    assert main.NetworkSettings(path).device_name == 'Living room'
+    game.select.network_button.dispatch('on_press')  # off: can change it
+    assert not game.select.name_field.disabled
+    game.close_ship_select()
+    game.show_ship_select(2)
+    assert game.select.name_field.text == 'Living room'
+
+
+def test_typed_device_name_is_used_for_joining(env):
+    host = env.host()
+    client = env.new_game()
+    client.show_ship_select(2)
+    client.select.name_field.text = 'Kitchen'
+    client.select.join_network_button.dispatch('on_press')
+    client.join_game('127.0.0.1', host.net.session.port, 'TV')
+    env.pump()
+    assert 'Kitchen' in host.net.lobby.names.values()
+    assert not hasattr(client.select, 'name_field') or \
+        client.select.typed_name is None        # a client's screen: no box
+
+
+def test_device_name_box_is_reached_from_the_bottom_row(env):
+    game = env.new_game()
+    game.show_ship_select(2)
+    select = game.select
+    press(game, KEY_DOWN)
+    press(game, KEY_RIGHT)
+    assert select.bar[select.bar_index] is select.name_field
+    press(game, KEY_ENTER)
+    assert select.name_field.focus and select.typing
+
+
+def test_typing_the_device_name_joins_nobody(env):
+    game = env.new_game()
+    game.show_ship_select(2)
+    select = game.select
+    select.name_field.focus = True
+    press(game, KEY_SPACE)
+    press(game, KEY_DOWN)
+    assert select.slots == [None] * 4 and select.bar_device is None
+    press(game, KEY_ESC)                    # done typing, still on the screen
+    assert not select.name_field.focus and game.select_active
+    press(game, KEY_SPACE)
+    assert select.slots[0] == ('keys', 0)
+
+
+def test_device_name_settings_fall_back(tmp_path):
+    path = tmp_path / 'net.json'
+    path.write_text(json.dumps({'device_name': 5}))
+    assert main.NetworkSettings(str(path)).device_name == ''
+    path.write_text(json.dumps({'device_name': 'x' * 100}))
+    assert main.NetworkSettings(str(path)).device_name == ''
+    path.write_text(json.dumps({'last_address': '1.2.3.4'}))
+    assert main.NetworkSettings(str(path)).device_name == ''
 
 def test_address_corrupt_settings_fall_back(tmp_path):
     path = tmp_path / 'net.json'
@@ -302,6 +415,55 @@ def test_device_name_and_multicast_lock_on_desktop():
 
 # ---- hosting and the shared join screen ---------------------------------------
 
+def test_host_toggle_keeps_the_joined_players(env):
+    game = env.new_game()
+    game.show_ship_select(2)
+    press(game, KEY_SPACE)                 # keyboard set 1 joins first
+    select = game.select
+    assert select.network_button.text == 'Local network: Off'
+    assert select.info.text == ''
+    select.network_button.dispatch('on_press')
+    assert game._hosting and select.net is game.net
+    assert select.slots[0] == ('keys', 0)
+    assert select.network_button.text == 'Local network: On'
+    assert select.device_label(('keys', 0)) == 'Keys set 1 · this device'
+    client = env.new_game()
+    client.show_network()
+    client.join_game('127.0.0.1', game.net.session.port, 'TV')
+    env.pump()
+    pad_fire(client)
+    env.pump()
+    assert select.slots[1] == ('net', 1, ('pad', 0))
+    select.network_button.dispatch('on_press')     # off again
+    env.pump()
+    assert not game._hosting and env.announcers[0].closed
+    assert select.slots == [('keys', 0), None, None, None]
+    assert select.info.text == ''
+    assert select.device_label(('keys', 0)).startswith('Keys W A D')
+    assert client.menu_active
+    assert client.menu.ids.message.text == 'The host ended the game'
+
+
+def test_host_toggle_reports_a_network_error(env, monkeypatch):
+    def refuse(name):
+        raise OSError(98, 'Address already in use')
+    monkeypatch.setattr(main, 'make_host_session', refuse)
+    game = env.new_game()
+    game.show_ship_select(2)
+    game.select.network_button.dispatch('on_press')
+    assert not game._hosting
+    assert game.select.network_button.text == 'Local network: Off'
+    assert game.select.message.text == \
+        'Could not open to the network: Address already in use'
+
+
+def test_client_join_screen_has_only_back(env):
+    host = env.host()
+    client = env.client(host)
+    assert client.select.bar == [client.select.back_button]
+    assert client.select.network_button.parent is None
+
+
 def test_host_join_shows_address_and_announces(env):
     host = env.host()
     assert host.select.info.text == 'Hosting on 192.168.1.20:{}'.format(
@@ -347,8 +509,8 @@ def test_host_join_client_cannot_change_another_slot(env):
     client = env.client(host)
     press(host, KEY_SPACE)
     env.pump()
-    client.net.touch(slot=0, button='next')
-    client.net.touch(slot=0, button='leave')
+    client.net.panel(0, 'next')
+    client.net.panel(0, 'leave')
     env.pump()
     assert host.net.lobby.slots[0] == ('keys', 0)
     assert host.ship_colors.colors[0] == 'blue'
@@ -617,6 +779,49 @@ def test_field_view_mirrors_ships_shots_asteroids_and_sounds(env):
     assert status.spaceship.lives == 2
 
 
+def test_field_view_has_its_own_background(env):
+    host, client = started(env)
+    view = client.field_view
+    assert tuple(view.debris.size) == view.field
+    assert tuple(view.nebula.size) == view.field
+    kinds = (main.Nebula, main.AnimatedBackground)
+    screen = [c for c in client.children if isinstance(c, kinds)]
+    assert len(screen) == 2 and all(c.opacity == 0 for c in screen)
+    assert client.background_widget() is view.debris
+    assert all(c.opacity == 1 for c in host.children if isinstance(c, kinds))
+    client.game_stop()
+    assert all(c.opacity == 1 for c in screen)
+
+
+def test_nebula_stretches_over_the_widget():
+    nebula = main.Nebula(size=(1600, 720))
+    assert tuple(nebula._rect.size) == (1600, 720)
+    assert nebula._rect.source.endswith('images/nebula_blue.png')
+
+
+@pytest.mark.parametrize('size', [(1600, 720), (720, 1600), (640, 480)])
+def test_debris_keeps_its_own_size_and_scrolls(size):
+    debris = main.AnimatedBackground(size=size)
+    debris.pause()
+    assert tuple(debris.texture.size) == (640, 480)
+    u0, v0, u1, _, _, v1, _, _ = debris._rect.tex_coords
+    assert abs(u1 - u0) == pytest.approx(size[0] / 640)
+    assert abs(v1 - v0) == pytest.approx(size[1] / 480)
+    debris.shift = 320                  # half a picture to the left
+    left, _, right, _, _, _, _, _ = debris._rect.tex_coords
+    assert left == pytest.approx(u0 + 0.5)
+    assert abs(right - left) == pytest.approx(size[0] / 640)
+
+
+def test_debris_widgets_do_not_move_each_other():
+    """They share Kivy's cached texture; each scrolls on its own."""
+    a, b = main.AnimatedBackground(size=(640, 480)), \
+        main.AnimatedBackground(size=(640, 480))
+    a.pause()
+    b.pause()
+    a.shift, b.shift = 0, 320
+    assert a._rect.tex_coords[0] != pytest.approx(b._rect.tex_coords[0])
+
 def test_field_view_engine_sound_follows_thrust(env):
     host, client = started(env)
     host.controls[0].press('up')
@@ -632,16 +837,50 @@ def test_field_view_engine_sound_follows_thrust(env):
 
 def test_late_join_client_gamepad_as_player_3(env):
     host, client = started(env)
+    watcher = env.client(host)             # a machine without a player
     before = [(tuple(s.pos), s.lives, s.points) for s in host.spaceships]
-    pad_fire(client)                       # a pad on the watching client
+    pad_fire(watcher)
     env.pump()
-    assert host.net.lobby.slots[2] == ('net', 1, ('pad', 0))
+    assert host.net.lobby.slots[2] == ('net', 2, ('pad', 0))
     assert len(host.spaceships) == 3
     assert [(tuple(s.pos), s.lives, s.points)
             for s in host.spaceships[:2]] == before
     env.frames(host)
-    assert sorted(client.mirror_ships) == [0, 1, 2]
-    assert client.controls[2] is not None
+    assert sorted(watcher.mirror_ships) == [0, 1, 2]
+    assert watcher.controls[2] is not None
+    assert not watcher.prompt.visible
+
+
+def test_late_join_machine_with_a_player_brings_no_more(env):
+    host, client = started(env)
+    assert not client.prompt.visible and not host.prompt.visible
+    pad_fire(client)                       # the client already plays
+    press(host, ord('k'), 14)              # keys set 2 of the host: also
+    env.pump()
+    assert host.net.lobby.slots[2:] == [None, None]
+    assert len(host.spaceships) == 2
+    for game, slot in ((client, 1), (host, 0)):
+        ship = host.controls[slot].spaceship   # if you die, you die
+        ship.lives = 0
+        host.lose_spaceship(ship)
+        env.pump()
+    assert host.results_active               # both lost: game over
+
+
+def test_late_join_lost_player_stays_out(env):
+    host, client = started(env)
+    watcher = env.client(host)
+    env.frames(host)
+    ship = host.controls[1].spaceship
+    ship.lives = 0
+    host.lose_spaceship(ship)               # the client's player is out
+    env.pump()
+    env.frames(host)
+    assert host.net.lobby.out[1] and not client.prompt.visible
+    pad_fire(client)
+    env.pump()
+    assert host.net.lobby.slots[2] is None
+    assert watcher.prompt.visible           # others still may join
 
 
 def test_late_join_host_keyboard(env):
@@ -668,50 +907,31 @@ def test_late_join_starts_away_from_asteroids(env):
     asteroid.pos = tuple(start)
     host.add_widget(asteroid)
     host.asteroids.append(asteroid)
-    pad_fire(client)
+    pad_fire(env.client(host))
     env.pump()
     ship = host.spaceships[2]
     assert main.Vector(*ship.pos).distance(asteroid.pos) >= 200
     assert ship.lives == 3 and ship.points == 0
 
 
-def test_late_join_full_and_out(env):
+def test_late_join_full(env):
     host, client = started(env)
-    pad_fire(client, 0)
-    pad_fire(client, 1)
-    env.pump()
+    for _ in range(2):
+        pad_fire(env.client(host))
+        env.pump()
     assert len(host.spaceships) == 4
-    other = env.client(host)                 # a third machine watches
+    other = env.client(host)                 # a fifth machine watches
     env.frames(host)
     pad_fire(other)
     env.pump()
     assert len(host.spaceships) == 4
     assert other.prompt.label.text == 'The game is full'
-    ship = host.controls[2].spaceship        # client's pad 0 loses its ship
-    ship.lives = 0
-    host.lose_spaceship(ship)
-    env.pump()
-    assert host.net.lobby.out[2]
-    pad_fire(client, 0)                       # out until the game ends
-    env.pump()
-    assert host.net.lobby.slots[2] == ('net', 1, ('pad', 0))
-    assert len(host.spaceships) == 3
-
-
-def test_late_join_prompt_returns_when_own_ship_is_out(env):
-    host, client = started(env)
-    assert not host.prompt.visible
-    ship = host.controls[0].spaceship
-    ship.lives = 0
-    host.lose_spaceship(ship)
-    assert host.prompt.visible
-    assert host.prompt.label.text == 'Press FIRE to join · 2 slots free'
 
 
 def test_late_join_survival_counts_from_joining(env):
     host, client = started(env)
     host.elapsed = 30
-    pad_fire(client)
+    pad_fire(env.client(host))
     env.pump()
     host.elapsed = 50
     ship = host.controls[2].spaceship
@@ -768,9 +988,10 @@ def test_net_leave_client_leaves_others_play_on(env):
     host.resume()                          # the leaver had paused the game
     env.frames(host)
     assert sorted(client.mirror_ships) == [0, 1]
-    pad_fire(client)                       # the free slot is taken again
+    fourth = env.client(host)
+    pad_fire(fourth)                       # the free slot is taken again
     env.pump()
-    assert host.net.lobby.slots[2] == ('net', 1, ('pad', 0))
+    assert host.net.lobby.slots[2] == ('net', 3, ('pad', 0))
 
 
 def test_net_leave_client_app_closed(env):
@@ -961,12 +1182,23 @@ def test_shared_leaderboard_kept_after_disconnect(env, tmp_path):
     assert [e['name'] for e in again.entries] == ['Ann']
 
 
-def test_shared_leaderboard_save_on_a_client(env):
+def _has_save(game):
+    return game.results_screen.save_button in game.results_screen.children
+
+
+def test_shared_leaderboard_save_on_the_top_players_device(env):
     host, client = started(env)
-    third = env.client(host)
-    host.spaceships[1].points = 6
+    third = env.client(host)                   # watched, no player
+    host.spaceships[1].points = 6              # the client's player is top
     host.elapsed = 33
     _end(env, host)
+    assert _has_save(client)
+    assert not _has_save(host) and not _has_save(third)
+    assert 'Save to leaderboard' not in [
+        b.text for b in host.results_screen.buttons]
+    host.results_screen.armed_at = 0
+    host.results_screen.save_score()           # nothing to press there
+    assert not host.name_active
     screen = client.results_screen
     screen.armed_at = 0
     screen.save_score()
@@ -976,24 +1208,40 @@ def test_shared_leaderboard_save_on_a_client(env):
     for game in (host, client, third):
         assert [(e['name'], e['points'], e['seconds'])
                 for e in game.leaderboard.entries] == [('Ann', 6, 33)]
-        button = game.results_screen.ids.btn_save
-        assert button.text == 'Saved on Pixel 8' and button.disabled
+    button = client.results_screen.save_button
+    assert button.text == 'Saved on Pixel 8' and button.disabled
+    for game in (host, third):
+        assert game.results_screen.ids.message.text == \
+            'Score saved on Pixel 8'
     assert client.leaderboard.last_name == 'Ann'
     assert host.leaderboard.last_name == ''
 
 
-def test_shared_leaderboard_two_saves_at_once(env):
+def test_shared_leaderboard_save_from_another_device_is_ignored(env):
     host, client = started(env)
+    host.spaceships[0].points = 3              # the host's player is top
     _end(env, host)
-    for game, name in ((host, 'Hal'), (client, 'Ann')):
-        game.results_screen.armed_at = 0
-        game.results_screen.save_score()
-        game.name_screen.ids.field.text = name
-        game.name_screen.accept()
+    assert _has_save(host) and not _has_save(client)
+    client.net.send({'t': 'save', 'game': client.net.game_id, 'name': 'Eve'})
     env.pump()
-    assert len(host.leaderboard.entries) == 1
-    assert client.leaderboard.entries == host.leaderboard.entries
-    assert host.leaderboard.entries[0]['name'] == 'Hal'
+    assert host.leaderboard.entries == client.leaderboard.entries == []
+    host.results_screen.store_score('Hal')
+    env.pump()
+    assert [e['name'] for e in client.leaderboard.entries] == ['Hal']
+    assert client.results_screen.ids.message.text == 'Score saved on TV'
+
+
+def test_shared_leaderboard_top_player_left(env):
+    host, client = started(env)
+    third = env.client(host)
+    pad_fire(third)
+    env.pump()
+    host.spaceships[2].points = 9              # the top player then leaves
+    third.game_stop()
+    env.pump()
+    _end(env, host)
+    assert not _has_save(host) and not _has_save(client)
+    assert host.net.saver == -1
 
 
 def test_shared_leaderboard_single_player_sends_nothing(env, monkeypatch):

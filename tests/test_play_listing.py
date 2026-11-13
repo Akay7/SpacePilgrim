@@ -147,13 +147,13 @@ def test_frozen_scene_does_not_move(scene_game):
     before = [tuple(w.pos) for w in things]
     background = [c for c in scene_game.children
                   if isinstance(c, __import__('main').AnimatedBackground)][0]
-    uv = background.uv_pos_x_px
+    uv = background.shift
     frame = scene_game.explosions[0].frame
     for _ in range(5):
         Clock.tick()
     assert [tuple(w.pos) for w in things] == before
     assert len(scene_game.asteroids) == 3
-    assert background.uv_pos_x_px == uv
+    assert background.shift == uv
     assert scene_game.explosions[0].frame == frame == ls.EXPLOSION_FRAME
 
 

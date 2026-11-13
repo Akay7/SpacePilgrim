@@ -136,10 +136,6 @@
         on_press: root.parent.show_ship_select(2)
 
     Button:
-        text: "Network game"
-        on_press: root.parent.show_network()
-
-    Button:
         text: "Leaderboard"
         on_press: root.parent.show_leaderboard()
 
@@ -476,26 +472,8 @@
     size: Window.size
 
 
-<Background@Widget>:
-    source: ''
-    canvas.before:
-        Rectangle:
-            size: self.size
-            source: self.source
-
-
-<AnimatedBackground>:
-    canvas:
-        Rectangle:
-            size: self.size
-            pos: self.pos
-            texture: self.background
-
-
 <SpacePilgrimGame>:
-    Background:
-        source: "images/nebula_blue.png"
+    Nebula:
         size: root.size
     AnimatedBackground:
-        source: "images/debris.png"
         size: root.size

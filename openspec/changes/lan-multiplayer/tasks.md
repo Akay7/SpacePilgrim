@@ -186,8 +186,24 @@
 
   Note any jitter seen to decide the open question on interpolation.
 
+## 9. One multiplayer screen, one player per machine mid-game, field background
+
+- [x] 9.1 Merge *Network game* into *Multiplayer*.
+  - The menu goes back to five entries.
+  - The join screen gets a line above the panels (`info` and the message) and a bottom row: *Back*, *Local network: Off / On* (`set_hosting`, keeping the join screen's `Lobby` and players) and *Join a network game*. A client's mirror join screen has only *Back*.
+  - The bottom row is reached with Down by a device that has not joined; Left / Right, FIRE and Up as in design decision 15.
+  - `NetworkScreen` loses *Host a game*; its *Back* returns to the join screen.
+  - Test with keyboard arrows and a gamepad hat (toggle on without joining, Up and FIRE joins again), that the toggle keeps the joined players and, turned off, frees the client's slot and tells the client, that a host error is shown, and that the client's row has only *Back*. Verify with `pytest tests -k "bottom_row or host_toggle or network_screen or client_join_screen"`.
+- [x] 9.2 During a running network game, refuse a join (`denied: out`) from any machine that already holds a slot, playing or out, the host included, and show the join prompt only on machines that hold none. Test that a client with a player and the host with a player cannot add one, that a destroyed client player cannot rejoin while a watcher still can, and that late joins from watchers work as before. Verify with `pytest tests -k late_join`.
+- [x] 9.3 Give `FieldView` its own `Nebula` (the picture stretched over the widget, also used for the full-screen background instead of the kv `Background`) and debris sized to the field, hide and pause the game's full-screen background during a client game and restore it afterwards, and let `background_widget()` return the field's debris. Test the sizes, the hidden and restored screen background, and that the host's background is untouched; check a screenshot of a 4:3 client of a 16:9 host (black bars above and below). Verify with `pytest tests -k field_view`.
+- [x] 9.4 Update the README: one *Multiplayer* entry with the *Local network* toggle and *Join a network game*, the bottom row by keyboard, gamepad and remote, one player per machine during a running game, and the field background on clients. Verify that it no longer mentions a *Network game* menu entry or *Host a game*.
+
+- [x] 9.5 Offer *Save to leaderboard* in a network game only on the top player's device: record each result's `machine`, send `saver` in `over` (-1 when that machine has left), leave the button out on the other devices (they say "Score saved on <machine>" once saved), and let the host accept saves only from `saver`. Test the top player's client saving for everybody, the host's and a watcher's screens without the button, a save from another client being ignored, and a top player who left. Verify with `pytest tests -k shared_leaderboard`.
+- [x] 9.6 Tile the scrolling debris at its own 640 x 480 px instead of stretching it (scrolling moves the rectangle's own texture coordinates, not the shared texture's `uvpos`); the nebula stays stretched. Test the repeat counts, the scroll shift and two independent debris layers; check a 1600 x 720 menu screenshot. Verify with `pytest tests -k debris`.
+- [x] 9.7 Add a *Device name* box to the join screen's bottom row (between *Back* and *Local network*; reachable with Down/Right and FIRE, which focuses it). Empty uses the model or host name, shown as the hint. Save it as `device_name` in `network.json`, use it when hosting starts or a client connects, disable it while hosting, and ignore game keys while it has focus (Escape leaves it). Test the default, a typed name for hosting and joining, persistence, the bottom row and typing. Verify with `pytest tests -k device_name`.
+
 ## Workflow follow-up
 
-- Bump `__version__` to 0.6.0 and add a README history entry when releasing.
+- [x] Bump `__version__` to 0.6.0 and add a README history entry.
 - Update the Play Console data-safety form for the new network permissions and the shared nicknames before publishing.
 - Archive the change after review so the delta specs merge into `openspec/specs/`.

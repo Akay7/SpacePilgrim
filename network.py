@@ -12,7 +12,6 @@ connection it came on."""
 import errno
 import json
 import re
-import selectors
 import socket
 import time
 
@@ -42,211 +41,139 @@ class ProtocolError(ValueError):
     """A message that breaks the protocol: the connection is closed."""
 
 
-# ---- field checks ----------------------------------------------------------
-# Each check returns the value as the game uses it, or raises ProtocolError.
+# ---- message checks ----------------------------------------------------------
+# A check is a function returning the value as the game uses it (or raising
+# ProtocolError), or a tuple of the values allowed.
 
 def _fail(what):
     raise ProtocolError(what)
 
 
-def _int(value, low=None, high=None):
-    if type(value) is not int:
-        _fail('not an integer')
-    if (low is not None and value < low) or (high is not None and value > high):
-        _fail('integer out of range')
-    return value
-
-
-def _number(value, low=None, high=None):
-    if type(value) not in (int, float) or value != value:   # NaN
-        _fail('not a number')
-    if (low is not None and value < low) or (high is not None and value > high):
-        _fail('number out of range')
-    return value
-
-
-def _string(value, limit=NAME_LIMIT):
-    if not isinstance(value, str) or len(value) > limit:
-        _fail('bad string')
-    return value
-
-
-def _choice(options):
-    def check(value):
-        if value not in options:
+def _valid(test, value):
+    if isinstance(test, tuple):    # same type too: True is not 1, 1.0 not 1
+        if not any(type(value) is type(v) and value == v for v in test):
             _fail('unknown value')
+        return value
+    return test(value)
+
+
+def _int(low=0, high=None):
+    def check(value):
+        if (type(value) is not int or value < low
+                or (high is not None and value > high)):
+            _fail('bad integer')
+        return value
+    return check
+
+
+def _num(low=None, high=None):
+    def check(value):
+        if (type(value) not in (int, float) or value != value      # NaN
+                or (low is not None and value < low)
+                or (high is not None and value > high)):
+            _fail('bad number')
+        return value
+    return check
+
+
+def _str(limit=NAME_LIMIT):
+    def check(value):
+        if not isinstance(value, str) or len(value) > limit:
+            _fail('bad string')
         return value
     return check
 
 
 def _list(item, length=None, limit=1000):
     def check(value):
-        if not isinstance(value, list) or len(value) > limit:
-            _fail('not a list')
-        if length is not None and len(value) != length:
-            _fail('wrong length')
-        return [item(v) for v in value]
+        if (not isinstance(value, list) or len(value) > limit
+                or (length is not None and len(value) != length)):
+            _fail('bad list')
+        return [_valid(item, v) for v in value]
     return check
 
 
-def _optional(check):
-    def optional(value):
-        return None if value is None else check(value)
-    optional.optional = True
-    return optional
+def _row(*items):
+    """A fixed-length list, each place with its own check; a tuple."""
+    def check(value):
+        if not isinstance(value, list) or len(value) != len(items):
+            _fail('bad row')
+        return tuple(_valid(item, v) for item, v in zip(items, value))
+    return check
+
+
+def _dict(value):
+    """Checked by the receiver (leaderboard entries: Leaderboard.merge)."""
+    return value if isinstance(value, dict) else _fail('not an object')
 
 
 def device(value):
     """A device of the sending machine, as the game uses it: ('keys', set),
     ('pad', stick) or ('touch', side)."""
-    if not isinstance(value, list) or len(value) != 2:
-        _fail('bad device')
-    kind, key = value
-    if kind == 'keys' and key in (0, 1) and type(key) is int:
-        return ('keys', key)
-    if kind == 'pad' and type(key) is int and 0 <= key < 1 << 16:
-        return ('pad', key)
-    if kind == 'touch' and key in SIDES:
-        return ('touch', key)
-    _fail('bad device')
+    kind, key = _row(('keys', 'pad', 'touch'), lambda v: v)(value)
+    _valid({'keys': (0, 1), 'pad': _int(0, 0xffff), 'touch': SIDES}[kind], key)
+    return (kind, key)
 
 
-def slot_entry(value):
-    """A taken slot of the lobby: [peer, device, state, machine name]."""
-    if value is None:
-        return None
-    if not isinstance(value, list) or len(value) != 4:
-        _fail('bad slot')
-    peer, dev, state, name = value
-    return (_int(peer, 0), device(dev), _choice(SLOT_STATES)(state),
-            _string(name))
-
-
-def _point(value):
-    return _list(lambda v: _number(v), 2)(value)
-
-
-def _ship(value):
-    slot, x, y, angle, thrust, lives, points = _list(lambda v: v, 7)(value)
-    return (_int(slot, 0, SLOTS - 1), _number(x), _number(y), _number(angle),
-            _number(thrust, 0, 1), _int(lives, 0), _int(points, 0))
-
-
-def _asteroid(value):
-    ident, x, y, angle = _list(lambda v: v, 4)(value)
-    return (_int(ident, 0), _number(x), _number(y), _number(angle))
-
-
-def _shot(value):
-    ident, x, y = _list(lambda v: v, 3)(value)
-    return (_int(ident, 0), _number(x), _number(y))
-
-
-def _result(value):
-    slot, color, points, survived = _list(lambda v: v, 4)(value)
-    return (_int(slot, 0, SLOTS - 1), _string(color, 16), _int(points, 0),
-            _number(survived, 0))
-
-
-def leaderboard_entry(value):
-    """[id, nickname, points, seconds]; raises ProtocolError if invalid."""
-    if not isinstance(value, list) or len(value) != 4:
-        _fail('bad entry')
-    ident, name, points, seconds = value
-    if not isinstance(ident, str) or not re.fullmatch(r'[0-9a-f]{1,32}', ident):
-        _fail('bad entry id')
-    name = _string(name, NICK_LIMIT).strip()
-    if not name:
-        _fail('empty nickname')
-    return {'id': ident, 'name': name, 'points': _int(points, 0),
-            'seconds': _int(seconds, 0)}
-
-
-def _entries(value):
-    """Leaderboard entries: invalid ones are skipped, not fatal."""
-    if not isinstance(value, list) or len(value) > 100:
-        _fail('bad entries')
-    valid = []
-    for entry in value:
-        try:
-            valid.append(leaderboard_entry(entry))
-        except ProtocolError:
-            pass
-    return valid
-
-
-_peer = lambda v: _int(v, 0)                       # noqa: E731
-_slot = lambda v: _int(v, 0, SLOTS - 1)            # noqa: E731
-_name = lambda v: _string(v)                       # noqa: E731
-_game_id = lambda v: _string(v, 32)                # noqa: E731
-_slots = _list(slot_entry, SLOTS)
-_colors = _list(lambda v: _string(v, 16), SLOTS)
+_slot = _int(0, SLOTS - 1)
+_point = _list(_num(), 2)
+_colors = _list(_str(16), SLOTS)
+_taken = _row(_int(), device, SLOT_STATES, _str())   # peer, device, state, name
+_slots = _list(lambda v: None if v is None else _taken(v), SLOTS)
 
 SCHEMAS = {
-    'hello': {'proto': lambda v: _int(v, 0), 'name': _name},
-    'welcome': {'peer': _peer, 'phase': _choice(PHASES), 'name': _name},
-    'refuse': {'reason': _choice(('version', 'full'))},
+    'hello': {'proto': _int(), 'name': _str()},
+    'welcome': {'peer': _int(), 'phase': PHASES, 'name': _str()},
+    'refuse': {'reason': ('version', 'full')},
     'lobby': {'slots': _slots, 'colors': _colors,
-              'flash': _list(lambda v: bool(v) if type(v) is bool
-                             else _fail('bad flag'), SLOTS),
-              'name': _name, 'free': lambda v: _int(v, 0, SLOTS),
-              'phase': _choice(PHASES)},
-    'act': {'device': device, 'action': _choice(ACTIONS)},
-    'touch': {'side': _optional(_choice(SIDES)),
-              'slot': _optional(_slot),
-              'button': _optional(_choice(PANEL_BUTTONS))},
+              'flash': _list((True, False), SLOTS), 'name': _str(),
+              'free': _int(0, SLOTS), 'phase': PHASES},
+    'act': {'device': device, 'action': ACTIONS},
+    'touch': {'side': SIDES},                       # a touch strip: join
+    'panel': {'slot': _slot, 'button': PANEL_BUTTONS},
     'start': {'slots': _slots, 'colors': _colors, 'field': _point,
-              'elapsed': lambda v: _number(v, 0)},
-    'denied': {'device': device, 'reason': _choice(('full', 'out'))},
-    'ctl': {'slot': _slot, 'thrust': lambda v: _number(v, 0, 1),
-            'turn': _choice((-1, 0, 1))},
+              'elapsed': _num(0)},
+    'denied': {'device': device, 'reason': ('full', 'out')},
+    'ctl': {'slot': _slot, 'thrust': _num(0, 1), 'turn': (-1, 0, 1)},
     'fire': {'slot': _slot},
-    'snap': {'field': _point, 'elapsed': lambda v: _number(v, 0),
-             'ships': _list(_ship, limit=SLOTS),
-             'ast': _list(_asteroid), 'shots': _list(_shot),
+    'snap': {'field': _point, 'elapsed': _num(0),
+             # slot, x, y, angle, thrust, lives, points
+             'ships': _list(_row(_slot, _num(), _num(), _num(), _num(0, 1),
+                                 _int(), _int()), limit=SLOTS),
+             'ast': _list(_row(_int(), _num(), _num(), _num())),  # id x y angle
+             'shots': _list(_row(_int(), _num(), _num())),        # id x y
              'boom': _list(_point)},
     'pause': {},
     'resume': {},
-    'over': {'game': _game_id, 'results': _list(_result, limit=100)},
-    'lb': {'entries': _entries},
-    'save': {'game': _game_id, 'name': lambda v: _string(v, NICK_LIMIT)},
-    'saved': {'game': _game_id, 'by': _name},
-    'bye': {'reason': _optional(_choice(('menu', 'host-ended')))},
+    'over': {'game': _str(32), 'saver': _int(-1),   # -1: nobody may save
+             # slot, colour, points, survived
+             'results': _list(_row(_slot, _str(16), _int(), _num(0)),
+                              limit=100)},
+    'lb': {'entries': _list(_dict, limit=100)},
+    'save': {'game': _str(32), 'name': _str(NICK_LIMIT)},
+    'saved': {'game': _str(32), 'by': _str()},
+    'bye': {'reason': ('menu', 'host-ended')},
 }
 
 
 def check(message):
     """The message as the game uses it (tuples for devices and slots), or
     ProtocolError."""
-    if not isinstance(message, dict):
-        _fail('not an object')
-    kind = message.get('t')
+    kind = message.get('t') if isinstance(message, dict) else None
     schema = SCHEMAS.get(kind) if isinstance(kind, str) else None
     if schema is None:
         _fail('unknown message type')
     checked = {'t': kind}
     for field, test in schema.items():
         if field not in message:
-            if getattr(test, 'optional', False):
-                checked[field] = None
-                continue
             _fail('missing ' + field)
-        checked[field] = test(message[field])
+        checked[field] = _valid(test, message[field])
     return checked
 
 
-def _plain(value):
-    """Tuples (devices, slots) as JSON lists."""
-    if isinstance(value, (list, tuple)):
-        return [_plain(v) for v in value]
-    if isinstance(value, dict):
-        return {k: _plain(v) for k, v in value.items()}
-    return value
-
-
 def encode(message):
-    """One message as bytes on the wire."""
-    data = json.dumps(_plain(message), separators=(',', ':'),
+    """One message as bytes on the wire (tuples become lists)."""
+    data = json.dumps(message, separators=(',', ':'),
                       allow_nan=False).encode('utf-8') + b'\n'
     if len(data) > MAX_LINE:
         raise ProtocolError('message too long')
@@ -264,11 +191,9 @@ class Decoder:
         messages = []
         while True:
             end = self.buffer.find(b'\n')
-            if end < 0:
-                if len(self.buffer) > MAX_LINE:
-                    raise ProtocolError('line too long')
+            if end < 0 and len(self.buffer) <= MAX_LINE:
                 return messages
-            if end + 1 > MAX_LINE:
+            if end < 0 or end >= MAX_LINE:
                 raise ProtocolError('line too long')
             line = bytes(self.buffer[:end])
             del self.buffer[:end + 1]
@@ -283,7 +208,8 @@ class Decoder:
 
 class Connection:
     """One TCP connection: reads checked messages, queues reliable messages,
-    and keeps only the newest snapshot for a reader that falls behind."""
+    and keeps only the newest snapshot (`snapshot`, set by the host) for a
+    reader that falls behind."""
 
     def __init__(self, sock):
         self.sock = sock
@@ -298,6 +224,7 @@ class Connection:
         self.closing = False     # close once the outbox is sent
         self.closed = False
         self.eof = False         # the peer closed its side
+        self.peer = None         # host side: the client's id after hello
 
     def send(self, message):
         if self.closed:
@@ -307,10 +234,6 @@ class Connection:
             self.close()          # a peer that stopped reading long ago
             return
         self.outbox += data
-
-    def send_snapshot(self, message):
-        if not self.closed:
-            self.snapshot = encode(message)
 
     def read(self):
         """Messages that arrived. Sets `eof` when the peer closed after
@@ -354,21 +277,17 @@ class Connection:
 
 class HostSession:
     """The listening side. `poll()` returns events:
-    ('connect', peer, name), ('message', peer, msg), ('close', peer)."""
+    ('connect', peer, name), ('message', peer, msg), ('close', peer).
+    With at most MAX_CLIENTS + a few sockets, `poll()` simply tries each."""
 
-    def __init__(self, name, port=GAME_PORT, tries=PORT_TRIES, address='',
-                 phase='lobby'):
+    def __init__(self, name, port=GAME_PORT, tries=PORT_TRIES, address=''):
         self.name = name
-        self.phase = phase      # sent in `welcome`; set by the game
+        self.phase = 'lobby'    # sent in `welcome`; set by the game
         self.listener = None
         for candidate in range(port, port + max(tries, 1)):
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             try:
-                if hasattr(socket, 'SO_EXCLUSIVEADDRUSE'):   # Windows
-                    sock.setsockopt(socket.SOL_SOCKET,
-                                    socket.SO_EXCLUSIVEADDRUSE, 1)
-                else:
-                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 sock.bind((address, candidate))
                 sock.listen(MAX_CLIENTS + 2)
             except OSError:
@@ -382,24 +301,9 @@ class HostSession:
             raise OSError('no free port from {}'.format(port))
         self.listener.setblocking(False)
         self.port = self.listener.getsockname()[1]
-        self.selector = selectors.DefaultSelector()
-        self.selector.register(self.listener, selectors.EVENT_READ, None)
         self.pending = []       # connections that have not said hello
         self.clients = {}       # peer -> Connection
         self._next_peer = 1     # 0 is the host itself
-
-    def _accept(self, events):
-        while True:
-            try:
-                sock, _ = self.listener.accept()
-            except (BlockingIOError, InterruptedError):
-                return
-            except OSError:
-                return
-            conn = Connection(sock)
-            conn.peer = None
-            self.pending.append(conn)
-            self.selector.register(sock, selectors.EVENT_READ, conn)
 
     def _hello(self, conn, message, events):
         if message['t'] != 'hello':
@@ -422,10 +326,6 @@ class HostSession:
         events.append(('connect', peer, message['name']))
 
     def _drop(self, conn, events):
-        try:
-            self.selector.unregister(conn.sock)
-        except (KeyError, ValueError, OSError):
-            pass
         conn.close()
         if conn in self.pending:
             self.pending.remove(conn)
@@ -437,11 +337,13 @@ class HostSession:
         events = []
         if self.listener is None:
             return events
-        for key, _ in self.selector.select(0):
-            conn = key.data
-            if conn is None:
-                self._accept(events)
-                continue
+        while True:
+            try:
+                sock, _ = self.listener.accept()
+            except OSError:      # BlockingIOError: nobody is waiting
+                break
+            self.pending.append(Connection(sock))
+        for conn in self.pending + list(self.clients.values()):
             try:
                 for message in conn.read():
                     if conn.closing:
@@ -450,16 +352,11 @@ class HostSession:
                         self._hello(conn, message, events)
                     else:
                         events.append(('message', conn.peer, message))
-                if conn.eof:
-                    self._drop(conn, events)
+                if not conn.eof:
+                    conn.flush()
             except (ProtocolError, OSError):
-                self._drop(conn, events)
-        for conn in list(self.pending) + list(self.clients.values()):
-            try:
-                conn.flush()
-            except OSError:
                 conn.close()
-            if conn.closed:
+            if conn.eof or conn.closed:
                 self._drop(conn, events)
         return events
 
@@ -483,10 +380,6 @@ class HostSession:
         """Close one client's connection (no 'close' event)."""
         conn = self.clients.pop(peer, None)
         if conn is not None:
-            try:
-                self.selector.unregister(conn.sock)
-            except (KeyError, ValueError, OSError):
-                pass
             conn.close()
 
     def close(self, reason='host-ended'):
@@ -504,7 +397,6 @@ class HostSession:
         if self.listener is not None:
             self.listener.close()
             self.listener = None
-        self.selector.close()
 
 
 # connect_ex results of a connection still being set up
@@ -696,10 +588,10 @@ class Browser:
             return None
         try:
             return FoundGame(
-                address, _int(info.get('port'), 1, 65535),
-                _string(info.get('name')).strip() or address,
-                _int(info.get('players'), 0, SLOTS),
-                bool(info.get('playing')), _int(info.get('proto'), 0), seen)
+                address, _int(1, 65535)(info.get('port')),
+                _str()(info.get('name')).strip() or address,
+                _int(0, SLOTS)(info.get('players')),
+                bool(info.get('playing')), _int()(info.get('proto')), seen)
         except ProtocolError:
             return None
 

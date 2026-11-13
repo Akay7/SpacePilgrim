@@ -24,8 +24,8 @@ VALID = [
      'flash': [True, False, False, False], 'name': 'TV', 'free': 2,
      'phase': 'lobby'},
     {'t': 'act', 'device': ['touch', 'left'], 'action': 'fire'},
-    {'t': 'touch', 'side': 'top', 'slot': None, 'button': None},
-    {'t': 'touch', 'side': None, 'slot': 2, 'button': 'ready'},
+    {'t': 'touch', 'side': 'top'},
+    {'t': 'panel', 'slot': 2, 'button': 'ready'},
     {'t': 'start', 'slots': [SLOT, None, None, None],
      'colors': ['blue', 'green', 'red', 'yellow'], 'field': [800, 600],
      'elapsed': 12.5},
@@ -37,8 +37,10 @@ VALID = [
      'shots': [[9, 5, 6]], 'boom': [[1, 1]]},
     {'t': 'pause'},
     {'t': 'resume'},
-    {'t': 'over', 'game': 'ab12', 'results': [[0, 'blue', 5, 31.5]]},
-    {'t': 'lb', 'entries': [['00ff', 'Ann', 30, 61]]},
+    {'t': 'over', 'game': 'ab12', 'saver': 1,
+     'results': [[0, 'blue', 5, 31.5]]},
+    {'t': 'lb', 'entries': [{'id': '00ff', 'name': 'Ann', 'points': 30,
+                             'seconds': 61}]},
     {'t': 'save', 'game': 'ab12', 'name': 'Ann'},
     {'t': 'saved', 'game': 'ab12', 'by': 'Pixel 8'},
     {'t': 'bye', 'reason': 'host-ended'},
@@ -49,9 +51,6 @@ VALID = [
 def test_codec_round_trip(message):
     [back] = Decoder().feed(encode(message))
     assert back['t'] == message['t']
-    if message['t'] == 'lb':        # entries come back as the game keeps them
-        back['entries'] = [[e['id'], e['name'], e['points'], e['seconds']]
-                           for e in back['entries']]
     assert json.loads(encode(back)) == json.loads(encode(message))
 
 
@@ -61,11 +60,6 @@ def test_codec_devices_and_slots_become_tuples():
     assert lobby['slots'][1] is None
     [act] = Decoder().feed(encode(VALID[4]))
     assert act['device'] == ('touch', 'left')
-
-
-def test_codec_optional_fields_default_to_none():
-    [bye] = Decoder().feed(b'{"t":"bye"}\n')
-    assert bye == {'t': 'bye', 'reason': None}
 
 
 def test_codec_line_split_in_two_chunks():
@@ -90,6 +84,12 @@ def test_codec_oversized_line_is_rejected():
     b'{"proto":1}\n',                                   # no type
     b'{"t":"launch"}\n',                                # unknown type
     b'{"t":"hello","name":"x"}\n',                      # missing field
+    b'{"t":"bye"}\n',                                   # no reason
+    b'{"t":"panel","slot":0}\n',                         # no button
+    b'{"t":"panel","slot":0,"button":"jump"}\n',
+    b'{"t":"lb","entries":[["ab","Ann",1,2]]}\n',        # not an object
+    b'{"t":"lobby","slots":[null,null,null,null],"colors":["a","b","c","d"],'
+    b'"flash":[1,0,0,0],"name":"x","free":4,"phase":"lobby"}\n',  # 1 is no flag
     b'{"t":"hello","proto":"1","name":"x"}\n',          # wrong type
     b'{"t":"ctl","slot":4,"thrust":0,"turn":0}\n',      # slot out of range
     b'{"t":"ctl","slot":0,"thrust":2,"turn":0}\n',      # thrust above 1
@@ -110,17 +110,11 @@ def test_codec_rejects_bad_messages(line):
         Decoder().feed(line)
 
 
-def test_codec_skips_invalid_leaderboard_entries():
-    [lb] = Decoder().feed(encode({'t': 'lb', 'entries': [
-        ['ab', 'Ann', 30, 61],
-        ['XYZ!', 'Bad id', 1, 1],
-        ['cd', '', 1, 1],
-        ['ef', 'Neg', -1, 1],
-        ['01', 'x' * 13, 1, 1],
-        'junk',
-    ]}))
-    assert lb['entries'] == [
-        {'id': 'ab', 'name': 'Ann', 'points': 30, 'seconds': 61}]
+def test_codec_leaves_leaderboard_entries_to_the_leaderboard():
+    # the entries' fields are checked by Leaderboard.merge (test_game.py)
+    entries = [{'id': 'XYZ!', 'name': 5, 'points': -1}]
+    [lb] = Decoder().feed(encode({'t': 'lb', 'entries': entries}))
+    assert lb['entries'] == entries
 
 
 # ---- sessions ---------------------------------------------------------------

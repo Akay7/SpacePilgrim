@@ -6,41 +6,70 @@ Lets two to four people on the same local network play one SpacePilgrim game tog
 
 ## ADDED Requirements
 
-### Requirement: Network game entry
-The main menu SHALL have a "Network game" entry between "Multiplayer" and "Leaderboard". It SHALL open a network screen with "Host a game", the list of games found, "Enter address" and "Back". The network screen SHALL be operable by touch, keyboard, gamepad and TV remote. Back/Escape on it SHALL return to the main menu.
+### Requirement: One multiplayer entry
+The main menu SHALL keep a single "Multiplayer" entry for playing together, on one screen or over the network. Its join screen SHALL have a bottom row with "Back", a "Device name" box, a "Local network: Off / On" toggle, and "Join a network game".
 
-#### Scenario: Open with a TV remote
-- **WHEN** the main menu is shown on an Android TV and the player moves to "Network game" with the D-pad and presses the centre button
-- **THEN** the network screen opens with "Host a game" selected
+#### Scenario: One menu entry
+- **WHEN** the main menu is shown
+- **THEN** it has "Single player", "Multiplayer", "Leaderboard", "Settings" and "Exit", and no separate network entry
 
-#### Scenario: Back from the network screen
-- **WHEN** the network screen is shown and Escape is pressed
-- **THEN** the main menu is shown
+#### Scenario: Bottom row
+- **WHEN** "Multiplayer" is activated
+- **THEN** the join screen shows "Back", "Device name", "Local network: Off" and "Join a network game" under the slots
 
-#### Scenario: Menu fits a phone
-- **WHEN** the main menu is shown on a phone in landscape (about 360 dp high)
-- **THEN** all six entries are fully visible and each can be tapped
-
-### Requirement: Host a game
-"Host a game" SHALL open the join screen as a network game hosted by this device. The join screen SHALL show this device's local network address and port. From then on the game SHALL be announced on the local network about once a second, both on the join screen and while a game runs. The announcement SHALL stop when the host leaves the network game.
+### Requirement: Local network toggle
+Turning "Local network" on SHALL open the join screen's game to the local network. The screen SHALL show this device's address and port, and players already joined SHALL keep their slots. While on, the game SHALL be announced about once a second, on the join screen and while a game runs. Turning it off SHALL end the network game for every client.
 
 #### Scenario: Hosting shows the address
-- **WHEN** a player on a device with address 192.168.1.20 activates "Host a game"
-- **THEN** the join screen opens with four empty slots and shows "Hosting on 192.168.1.20" with the port
+- **WHEN** keyboard set 1 has joined on a device with address 192.168.1.20 and the player turns "Local network" on
+- **THEN** the join screen shows "Hosting on 192.168.1.20" with the port, the toggle shows "On", and keyboard set 1 still holds player 1
 
-#### Scenario: Local devices join on the host
-- **WHEN** the host's join screen is open and keyboard set 1 on the host presses Space
-- **THEN** player 1's slot is taken by keyboard set 1 of the host, as in local multiplayer
+#### Scenario: Local network off again
+- **WHEN** a client's gamepad holds player 2 and the host turns "Local network" off
+- **THEN** player 2's slot is empty, the game is no longer announced, and the client shows "The host ended the game"
 
 #### Scenario: Announcement stops
-- **WHEN** the host presses Escape on its join screen
+- **WHEN** the host presses Escape on its join screen with "Local network" on
 - **THEN** the main menu is shown, the game is no longer announced, and connected clients are told the host closed the game
 
+### Requirement: Device name
+The "Device name" box SHALL hold the name the other devices of a network game see for this device: in the game list, in slot labels and in "Score saved on". Empty, it SHALL show and use the device's own name (the model on Android, else the computer's host name). The name SHALL be kept across app restarts. It SHALL be used when this device starts hosting or joins a game, and SHALL NOT change while "Local network" is on. Keys typed into the box SHALL NOT join or move players.
+
+#### Scenario: Default name
+- **WHEN** the box is empty on a phone whose model is "Pixel 8" and the player turns "Local network" on
+- **THEN** the game is announced as "Pixel 8"
+
+#### Scenario: Own name
+- **WHEN** the player types "Living room" into the box and then joins a game
+- **THEN** the host's slot labels show "· Living room" for this device's players, and the box shows "Living room" after a restart
+
+#### Scenario: Typing joins nobody
+- **WHEN** the box has focus and the player types a space with keyboard set 1
+- **THEN** no slot is taken
+
+### Requirement: Bottom row by keyboard, gamepad and remote
+On the join screen, a keyboard set or gamepad that has not joined SHALL move to the bottom row with Down. Left and Right SHALL move along it, FIRE SHALL press the highlighted button (on the "Device name" box: start typing in it), and Up SHALL go back to joining. A device that has joined SHALL keep controlling its slot. A client's join screen SHALL offer only "Back" in that row.
+
+#### Scenario: Turn the local network on with a TV remote
+- **WHEN** nobody has joined on an Android TV's join screen and the player presses Down, Right, Right and the centre button
+- **THEN** "Local network" is turned on and no slot is taken
+
+#### Scenario: Back to joining
+- **WHEN** a gamepad that has not joined has moved to the bottom row and presses Up and then its fire button
+- **THEN** the gamepad takes the first free slot
+
+### Requirement: Join a network game screen
+"Join a network game" SHALL open a screen with the list of games found, "Enter address" and "Back". The screen SHALL be operable by touch, keyboard, gamepad and TV remote. Back/Escape on it SHALL return to the multiplayer join screen.
+
+#### Scenario: Back to the join screen
+- **WHEN** the join a network game screen is shown and Escape is pressed
+- **THEN** the multiplayer join screen is shown with "Local network" off
+
 ### Requirement: Find games on the local network
-While the network screen is open, it SHALL list the games announced on the local network. Each entry SHALL show the host's device name, the number of players out of four, and "in game" while a game runs. Games not announced for 3 seconds SHALL disappear from the list. Games of an incompatible version SHALL be listed as such and SHALL NOT be joinable. With no games found, the screen SHALL say it is searching.
+While the join a network game screen is open, it SHALL list the games announced on the local network. Each entry SHALL show the host's device name, the number of players out of four, and "in game" while a game runs. Games not announced for 3 seconds SHALL disappear from the list. Games of an incompatible version SHALL be listed as such and SHALL NOT be joinable. With no games found, the screen SHALL say it is searching.
 
 #### Scenario: Game appears
-- **WHEN** a device on the same Wi-Fi hosts a game with two players joined, and another device opens the network screen
+- **WHEN** a device on the same Wi-Fi hosts a game with two players joined, and another device opens the join a network game screen
 - **THEN** within 2 seconds the list shows that host's name with "2/4"
 
 #### Scenario: Running game listed
@@ -56,7 +85,7 @@ While the network screen is open, it SHALL list the games announced on the local
 - **THEN** its entry says the versions differ and activating it does nothing
 
 ### Requirement: Join by address
-"Enter address" SHALL ask for the host's address as `IP` or `IP:port`, with the default port used when none is given. Accepting SHALL connect to that host. An address that cannot be parsed, a connection that cannot be set up within 5 seconds, or a refused connection SHALL show a message on the network screen and SHALL keep the player there.
+"Enter address" SHALL ask for the host's address as `IP` or `IP:port`, with the default port used when none is given. Accepting SHALL connect to that host. An address that cannot be parsed, a connection that cannot be set up within 5 seconds, or a refused connection SHALL show a message on the join a network game screen and SHALL keep the player there.
 
 #### Scenario: Join by IP
 - **WHEN** the player enters "192.168.1.20" and accepts while that device hosts a game
@@ -64,7 +93,7 @@ While the network screen is open, it SHALL list the games announced on the local
 
 #### Scenario: Nobody there
 - **WHEN** the player enters an address where no game is hosted
-- **THEN** within 5 seconds the network screen says the host could not be reached
+- **THEN** within 5 seconds the join a network game screen says the host could not be reached
 
 ### Requirement: Shared join screen
 A connected client SHALL show the host's four slots with their current state. Every change on any device SHALL appear on all devices within half a second. The changes are: joining, leaving, colour, ready, and the device flash. A client's keyboard sets, gamepads and touch strips SHALL join, change colour, toggle ready and leave exactly as on a local join screen. Each device SHALL only change the slot it holds.
@@ -111,14 +140,14 @@ A client that connects while a game runs SHALL show the running game straight aw
 - **THEN** the phone shows the field with both ships, their lives and points, and a prompt to join with "2 slots free"
 
 ### Requirement: Join during a game
-During a network game, a device that has not joined SHALL take the first free slot when it presses FIRE (keyboard set or gamepad) or taps "Tap to join" (touch). This applies to every connected machine, the host included. On a touch device, "Tap to join" SHALL be shown at its free touch seats. The joining player SHALL get their saved colour if free, else the first free colour. No other player SHALL be affected. When all four slots are taken, the device SHALL be told the game is full.
+During a network game, a device of a machine with no player in the game SHALL take the first free slot with FIRE (keyboard set or gamepad) or "Tap to join" (touch, shown at the device's free touch seats). This holds for every machine, the host included. The player SHALL get their saved colour if free, else the first free colour. No other player SHALL be affected. With all four slots taken, the device SHALL be told the game is full.
 
 #### Scenario: Client gamepad joins a running game
 - **WHEN** a two-player network game runs and a gamepad on a watching client presses its fire button
 - **THEN** a third ship appears as player 3 on every device, driven by that gamepad, and the other two ships keep their lives, points and positions
 
 #### Scenario: Host keyboard joins a running game
-- **WHEN** a network game runs with two client players and keyboard set 1 on the host presses Space
+- **WHEN** a network game runs with two client players, nobody plays on the host, and keyboard set 1 on the host presses Space
 - **THEN** keyboard set 1 of the host takes a free slot and gets a ship
 
 #### Scenario: Touch joins a running game
@@ -136,12 +165,16 @@ A ship that joins during a game SHALL start with full lives and no points. It SH
 - **WHEN** a player joins while an asteroid passes their slot's start position
 - **THEN** the ship appears at least 200 px from every asteroid with 3 lives and 0 points
 
-### Requirement: Destroyed players stay out
-In a network game, a player whose ship lost its last life SHALL stay out until the game ends, keeping their slot. The device that drove that ship SHALL NOT join another slot in the same game. The game SHALL end when every ship is lost.
+### Requirement: A machine with a player brings no more
+Once a network game runs, a machine that has a player in it SHALL NOT add another player until the game ends. This holds whether that player still flies or was destroyed, and for the host as well as clients. A player whose ship lost its last life SHALL stay out until the game ends, keeping their slot. Its machine SHALL NOT show the join prompt. The game SHALL end when every ship is lost.
+
+#### Scenario: No second player during the game
+- **WHEN** a client's keyboard set plays in a running network game, a slot is free, and a gamepad on that client presses its fire button
+- **THEN** no ship is added and that client shows no join prompt
 
 #### Scenario: No rejoin after loss
-- **WHEN** player 2's ship is destroyed in a network game, a slot is free, and player 2's gamepad presses its fire button
-- **THEN** no ship is added for that gamepad and player 2's slot still shows them out
+- **WHEN** player 2's ship is destroyed in a network game, a slot is free, and any device of player 2's machine presses FIRE
+- **THEN** no ship is added and player 2's slot still shows them out
 
 ### Requirement: Shared field on every device
 The host SHALL run the game. Every client SHALL show the same ships, asteroids, shots, explosions, lives and points as the host. The field SHALL be scaled to fit the client's screen while keeping its proportions, and its edges SHALL be visible where the screen is wider or taller than the field. Ships, asteroids and shots SHALL wrap at the field edges. A client SHALL play the shot, explosion and engine sounds of the shared game.
@@ -157,6 +190,13 @@ The host SHALL run the game. Every client SHALL show the same ships, asteroids, 
 #### Scenario: Sounds on the client
 - **WHEN** a player on the host fires
 - **THEN** the client plays the shot sound
+
+### Requirement: Field background on a client
+On a client, the background (nebula and scrolling debris) SHALL cover the host's field only, scaled with it. The screen outside the field SHALL be black.
+
+#### Scenario: Letterboxed background
+- **WHEN** the host has a 16:9 screen and a client a 4:3 screen
+- **THEN** the client's nebula and debris fill the field and the bars above and below it are black
 
 ### Requirement: Input drives the player's own ship
 A device's own keyboard sets, gamepads and touch controls SHALL drive only the ship of the slot they joined. Thrust power, turning and fire SHALL reach the host within the network delay, including variable thrust from a trigger, stick or touch joystick. In-game input from devices that did not join SHALL only be used to join, except Back/Escape, which pauses. Touch controls and the Pause button SHALL appear only on the device of that touch player.
@@ -237,15 +277,19 @@ When a client connects, the host and the client SHALL exchange their leaderboard
 - **THEN** no entry appears twice on either device
 
 ### Requirement: Save a network game's score once
-In a network game, "Save to leaderboard" on any device SHALL store the game's top player once, with the nickname entered there, on every connected device. Once it is saved, "Save to leaderboard" SHALL show the score as saved on every device, with the device that saved it.
+In a network game, "Save to leaderboard" SHALL be shown only on the device of the game's top player. Saving there SHALL store the top player once, with the nickname entered there, on every connected device. The other devices SHALL then say on which device the score was saved. When the top player's device has left, no device SHALL offer to save.
 
-#### Scenario: Save on a client
-- **WHEN** a network game ends and a client player saves the score as "Ann"
-- **THEN** the entry "Ann" appears in the leaderboard of the client, the host and every other connected client, and every results screen shows the score as saved
+#### Scenario: Save on the top player's client
+- **WHEN** a network game ends with a client's player on top, and that client saves the score as "Ann"
+- **THEN** only that client showed "Save to leaderboard", the entry "Ann" appears in the leaderboard of the client, the host and every other connected client, and the other devices say "Score saved on" that client
 
-#### Scenario: Two devices save at once
-- **WHEN** the host and a client both activate "Save to leaderboard" for the same game
-- **THEN** exactly one entry is added on every device
+#### Scenario: Other devices cannot save
+- **WHEN** a network game ends with the host's player on top
+- **THEN** no client shows "Save to leaderboard", and a save request from a client is ignored
+
+#### Scenario: Top player left
+- **WHEN** the player with the most points left the game before it ended
+- **THEN** no device shows "Save to leaderboard"
 
 ### Requirement: Version check
 Host and client SHALL exchange a network protocol version when connecting. If the versions differ, the host SHALL refuse the client. The client SHALL then say that the game versions differ and stay on the network screen.

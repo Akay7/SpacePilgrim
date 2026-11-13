@@ -273,8 +273,8 @@ def test_menu_keyboard_navigation(kv_game):
     assert game.menu.selected == 0
     game._on_key_down(None, 274)  # down
     labels = [b.text for b in game.menu.buttons]
-    assert labels == ['Single player', 'Multiplayer', 'Network game',
-                      'Leaderboard', 'Settings', 'Exit']
+    assert labels == ['Single player', 'Multiplayer', 'Leaderboard',
+                      'Settings', 'Exit']
     assert game.menu.selected == 1
     game._on_key_up(None, 274)
     game._on_key_down(None, 273)  # up wraps back
@@ -461,7 +461,6 @@ def test_rebound_key_drives_ship(game):
 
 def _open_settings(game):
     _press(game, 274)              # down to Multiplayer
-    _press(game, 274)              # down to Network game
     _press(game, 274)              # down to Leaderboard
     _press(game, 274)              # down to Settings
     game._on_key_down(None, KEY_ENTER)
@@ -524,7 +523,7 @@ def test_settings_rebind_fire_in_game(kv_game):
     assert game.settings.buttons[3].text == 'Fire: F'
     assert game.settings.waiting == ''
     game.close_settings()
-    game.menu.move(-4)                   # back to "Single player"
+    game.menu.move(-3)                   # back to "Single player"
     _press(game, KEY_ENTER)              # ship selection
     _press(game, KEY_ENTER)              # ready: start the game
     game._on_key_down(None, KEY_F)
@@ -2192,6 +2191,8 @@ def test_leaderboard_merge_skips_invalid_entries(tmp_path):
         {'name': 'No id', 'points': 1, 'seconds': 1},
         {'id': 'ab', 'name': 'Neg', 'points': -1, 'seconds': 1},
         {'id': 'cd', 'name': 'Str', 'points': '9', 'seconds': 1},
+        {'id': 'ce', 'name': 5, 'points': 1, 'seconds': 1},
+        {'id': '0' * 40, 'name': 'Long id', 'points': 1, 'seconds': 1},
         'junk'])
     assert board.entries == []
     assert board.merge([{'id': 'ef', 'name': '  ' + 'x' * 20, 'points': 2,
@@ -2234,10 +2235,10 @@ def test_pause_stops_the_scrolling_background(kv):
         assert background is not None
         Clock.tick()
         game.pause()
-        at = background.uv_pos_x_px
+        at = background.shift
         for _ in range(5):
             Clock.tick()
-        assert background.uv_pos_x_px == at
+        assert background.shift == at
         game.resume()
         assert background.animation is not None
     finally:
