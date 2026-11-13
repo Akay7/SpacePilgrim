@@ -147,13 +147,13 @@ def test_frozen_scene_does_not_move(scene_game):
     before = [tuple(w.pos) for w in things]
     background = [c for c in scene_game.children
                   if isinstance(c, __import__('main').AnimatedBackground)][0]
-    uv = background.uv_pos_x_px
+    uv = background.shift
     frame = scene_game.explosions[0].frame
     for _ in range(5):
         Clock.tick()
     assert [tuple(w.pos) for w in things] == before
     assert len(scene_game.asteroids) == 3
-    assert background.uv_pos_x_px == uv
+    assert background.shift == uv
     assert scene_game.explosions[0].frame == frame == ls.EXPLOSION_FRAME
 
 
@@ -181,8 +181,12 @@ def test_scene_builders(scene_game, touch):
     kinds = [d[0] for d in game.select.slots if d]
     assert len(kinds) == 3 and ('touch' in kinds) == touch
     assert game.select.ready[0]
-    strips = game.select.side_buttons.values()
-    assert all(s.opacity == (1 if touch else 0) for s in strips)
+    select = game.select
+    taken = select._taken_seats()
+    for side, strip in select.side_buttons.items():
+        # on a phone a side player closes the bottom seat
+        shown = touch and not main.seat_closed(side, taken, select.seats)
+        assert (strip.parent is not None) == shown
 
     ls.ship_select(game, touch)
     assert isinstance(game.select, main.ShipSelectScreen)

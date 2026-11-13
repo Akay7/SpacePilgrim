@@ -53,7 +53,7 @@ def freeze(game):
             Animation.cancel_all(child)
             if child.animation is not None:
                 child.animation.unbind(on_complete=child.animate)
-            child.uv_pos_x_px = child.background.size[0] * BACKGROUND_OFFSET
+            child.shift = child.texture.width * BACKGROUND_OFFSET
 
 
 def clear_objects(game):

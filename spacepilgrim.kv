@@ -64,7 +64,8 @@
         # touch player at the middle of their edge, just inside their touch
         # controls, turned to read from their seat; keyboard and gamepad
         # players in the top row or the corners, in player order
-        center: root.label_center(self.texture_size, Window.size, root.side, root.inset, root.column)
+        # a client's players: beside the field (Game._place_hud)
+        center: root.spot_center(self.texture_size, root.spot) if root.spot else root.label_center(self.texture_size, Window.size, root.side, root.inset, root.column, root.along)
         canvas.before:
             PushMatrix
             Rotate:
@@ -73,14 +74,15 @@
         canvas.after:
             PopMatrix
         color: root.color
-        text: ("Lives {}  Points {}" if root.side == 'row' else "Lives {}\nPoints {}" if root.side == 'corner' else "Lives {:<5} Points {}").format(root.spaceship.lives, root.spaceship.points)
-        font_size: "17dp" if root.side in ('row', 'corner') else "23dp"
+        text: ("Lives {}\nPoints {}" if root.two_lines(root.side, Window.width, root.ends or bool(root.spot)) else "Lives {}  Points {}" if root.side == 'row' else "Lives {:<5} Points {}").format(root.spaceship.lives, root.spaceship.points)
+        font_size: "17dp" if root.side in ('row', 'corner', 'flank') or root.ends or root.spot else "23dp"
         font_name: 'data/fonts/RobotoMono-Regular.ttf'
 
     PauseButton:
         id: pause
-        # under the lives and points as the player reads them, see
-        # SpaceshipStatus.pause_center
+        # between the player's joystick and FIRE, on their outer line; next
+        # to the lives and points when there is no room (SpaceshipStatus.
+        # place_pause, pause_center)
         text: "Pause"
         font_size: "12dp"
         background_normal: ''
@@ -88,9 +90,7 @@
         background_color: 0, 0, 0, 0
         size_hint: None, None
         size: metrics.dp(44), metrics.dp(44)
-        opacity: 1 if root.show_menu else 0
-        disabled: not root.show_menu
-        center: root.pause_center(text_label.center, text_label.texture_size, root.side)
+        center: root.pause_spot or root.pause_center(text_label.center, text_label.texture_size, root.side)
         on_press: root.parent.pause()
         canvas.before:
             PushMatrix
@@ -116,8 +116,16 @@
 <Menu>:
     orientation: "vertical"
     spacing: metrics.dp(10)
-    size: metrics.dp(300), metrics.dp(340)
+    size: metrics.dp(300), metrics.dp(350)
     pos: (Vector(*Window.size) - Vector(*self.size)) / 2
+
+    Label:
+        # why the menu came back, e.g. a network game that ended
+        id: message
+        font_size: "14dp"
+        size_hint_y: None
+        height: metrics.dp(24) if self.text else 0
+        opacity: 1 if self.text else 0
 
     Button:
         text: "Single player"
@@ -201,7 +209,7 @@
     orientation: "vertical"
     spacing: metrics.dp(8)
     size_hint: None, None
-    size: metrics.dp(380), min(metrics.dp(420), Window.height - metrics.dp(10))
+    size: min(metrics.dp(380), Window.width - metrics.dp(10)), min(metrics.dp(420), Window.height - metrics.dp(10))
     pos: (Vector(*Window.size) - Vector(*self.size)) / 2
 
     Label:
@@ -228,6 +236,7 @@
         on_press: root.save_score()
 
     Button:
+        id: btn_again
         text: "Play again"
         size_hint_y: None
         height: metrics.dp(44)
@@ -275,11 +284,46 @@
         on_press: root.cancel()
 
 
+<AddressScreen>:
+    orientation: "vertical"
+    spacing: metrics.dp(8)
+    size_hint: None, None
+    size: metrics.dp(340), metrics.dp(210)
+    pos: (Vector(*Window.size) - Vector(*self.size)) / 2
+
+    Label:
+        text: "Host address (IP or IP:port)"
+        font_size: "20dp"
+
+    TextInput:
+        id: field
+        multiline: False
+        write_tab: False
+        input_filter: lambda text, from_undo: ''.join(c for c in text if c.isalnum() or c in '.:-')[:max(0, 64 - len(self.text))]
+        font_size: "20dp"
+        size_hint_y: None
+        height: metrics.dp(44)
+        padding: metrics.dp(10), metrics.dp(10)
+        on_text_validate: root.accept()
+
+    Button:
+        text: "Join"
+        size_hint_y: None
+        height: metrics.dp(44)
+        on_press: root.accept()
+
+    Button:
+        text: "Back"
+        size_hint_y: None
+        height: metrics.dp(44)
+        on_press: root.cancel()
+
+
 <LeaderboardScreen>:
     orientation: "vertical"
     spacing: metrics.dp(6)
     size_hint: None, None
-    size: metrics.dp(380), min(metrics.dp(400), Window.height - metrics.dp(10))
+    size: min(metrics.dp(380), Window.width - metrics.dp(10)), min(metrics.dp(400), Window.height - metrics.dp(10))
     pos: (Vector(*Window.size) - Vector(*self.size)) / 2
 
     Label:
@@ -428,26 +472,8 @@
     size: Window.size
 
 
-<Background@Widget>:
-    source: ''
-    canvas.before:
-        Rectangle:
-            size: self.size
-            source: self.source
-
-
-<AnimatedBackground>:
-    canvas:
-        Rectangle:
-            size: self.size
-            pos: self.pos
-            texture: self.background
-
-
 <SpacePilgrimGame>:
-    Background:
-        source: "images/nebula_blue.png"
+    Nebula:
         size: root.size
     AnimatedBackground:
-        source: "images/debris.png"
         size: root.size

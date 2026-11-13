@@ -1365,7 +1365,7 @@ def test_join_by_fire_in_order_and_once(kv_game):
     assert join.slots == [None] * 4
     _press(kv_game, KEY_SPACE)                  # keyboard set 1
     assert join.slots[0] == ('keys', 0)
-    assert join.panels[0]['device'].text == 'Keys W A D Space'
+    assert join.panels[0]['device'].text == 'Keyboard 1'
     _pad(kv_game, 1, 0)                         # a gamepad
     assert join.slots[1] == ('pad', 1)
     assert join.panels[1]['device'].text == 'Gamepad 2'
@@ -1439,7 +1439,7 @@ def test_touch_joins_from_a_side_strip(kv_game):
     _press(kv_game, KEY_SPACE)                  # keyboard player 1
     right.dispatch('on_press')                  # first free slot, right side
     assert join.slots[:2] == [('keys', 0), ('touch', 'right')]
-    assert join.panels[1]['device'].text == 'Touch · right side'
+    assert join.panels[1]['device'].text == 'Touch · right'
     assert right.disabled and right.text == 'Player 2 · touch'
     right.dispatch('on_press')                  # side taken: nothing
     assert join.slots[2] is None
@@ -1463,6 +1463,7 @@ def test_side_strips_are_at_the_screen_edges(kv_game):
     assert right.right > Window.width - main.dp(10)
     assert left.height == join.height
     middle = join.panels[0]['panel'].parent.parent  # panels + Back row
+    middle.parent.do_layout()
     assert left.right < middle.x and right.x > middle.right
 
 
@@ -1626,8 +1627,8 @@ def test_join_strips_hidden_without_touchscreen(kv_game):
     game.show_ship_select(2)
     join = game.select
     for strip in join.side_buttons.values():
-        assert strip.opacity == 0 and strip.disabled
-    assert 'tap a side' not in join.panels[0]['empty'].text
+        assert strip.parent is None        # off screen: no room, no taps
+    assert 'tap an edge' not in join.panels[0]['empty'].text
     _press(game, KEY_SPACE)                     # keys and pads still join
     assert join.slots[0] == ('keys', 0)
 
@@ -1641,8 +1642,8 @@ def test_first_touch_shows_join_strips(kv_game):
     game._on_window_touch(None, None)
     assert game.has_touch
     for strip in join.side_buttons.values():
-        assert strip.opacity == 1 and not strip.disabled
-    assert 'tap a side' in join.panels[1]['empty'].text
+        assert strip.parent is not None and not strip.disabled
+    assert 'tap an edge' in join.panels[1]['empty'].text
     join.side_buttons['right'].dispatch('on_press')
     assert join.slots[0] == ('touch', 'right')
 
@@ -1655,30 +1656,36 @@ from kivy.core.window import Window
 
 
 def _pause_button(status):
-    return next(c for c in status.children if c.__class__.__name__ == 'PauseButton')
+    return status.pause_button
 
 
 def test_pause_button_follows_touch_controls(kv_game):
     game = kv_game
     game.game_start()
     button = _pause_button(game.spaceship_status)
-    # keyboard play: no way back needed on screen; a touch shows the button
-    assert button.opacity == 0 and button.disabled
+    # keyboard play: no way back needed on screen; a touch shows the button.
+    # Hidden, it is off screen, so it can not swallow taps
+    assert button.parent is None
     game._on_window_touch(None, None)
-    assert button.opacity == 1 and not button.disabled
+    assert button.parent is game.spaceship_status
+    assert button.parent is not None and not button.disabled
     game._on_key_down(None, KEY_UP)
-    assert button.opacity == 0 and button.disabled
+    assert button.parent is None
 
 
-def test_single_player_pause_button_is_under_the_points(kv_game):
+def test_single_player_pause_button_is_between_the_controls(kv_game):
     game = kv_game
     game.game_start()
     game._on_window_touch(None, None)
     status = game.spaceship_status
     button = _pause_button(status)
-    label = status.children[-1]
-    assert button.center_x == label.center_x
-    assert button.top < label.center_y - label.texture_size[1] / 2
+    layout = game.controls[0].touch_buttons
+    stick, fire = layout.stick, layout.fire
+    # the middle of the bottom edge, on the bottom line of the controls
+    assert button.center_x == pytest.approx(
+        (stick.center_x + fire.center_x) / 2)
+    assert button.y == pytest.approx(stick.y) == pytest.approx(fire.y)
+    assert stick.right < button.x and button.right < fire.x
 
 
 def test_pause_button_pauses_and_main_menu_leaves(kv_game):
@@ -1692,16 +1699,26 @@ def test_pause_button_pauses_and_main_menu_leaves(kv_game):
     assert game.menu_active and not game.paused
 
 
-def test_touch_players_pause_buttons_are_mid_side_under_the_text(
+def test_touch_players_pause_buttons_are_between_their_controls(
         kv_game, start_game):
     game = start_game(slots=TOUCH2)
     left, right = game.statuses
-    for status, inner in ((left, 1), (right, -1)):
+    for status, controls, inner in ((left, game.controls[0], 1),
+                                    (right, game.controls[1], -1)):
         button = _pause_button(status)
         label = status.children[-1]
-        assert button.opacity == 1 and not button.disabled
-        assert button.center_y == label.center_y == pytest.approx(
-            Window.height / 2)
+        stick, fire = controls.touch_buttons.stick, controls.touch_buttons.fire
+        assert button.parent is not None and not button.disabled
+        # midway between joystick and FIRE along the side, its outer side
+        # on the joystick's outer side, the text further in
+        assert button.center_y == pytest.approx(
+            (stick.center_y + fire.center_y) / 2)
+        if inner == 1:
+            assert button.x == pytest.approx(stick.x)
+        else:
+            assert button.right == pytest.approx(stick.right)
+        low, high = sorted((stick, fire), key=lambda w: w.y)
+        assert low.top < button.y and button.top < high.y
         assert (button.center_x - label.center_x) * inner < 0
     _pause_button(left).dispatch('on_press')
     assert game.paused
@@ -1878,6 +1895,11 @@ def test_elapsed_counts_only_while_ships_fly(kv_game):
     assert game.elapsed == pytest.approx(0.75)
 
 
+def _scores(entries):
+    """Leaderboard entries without their ids."""
+    return [{k: v for k, v in e.items() if k != 'id'} for e in entries]
+
+
 def test_leaderboard_orders_caps_and_persists(tmp_path):
     path = str(tmp_path / 'lb.json')
     board = main.Leaderboard(path)
@@ -1894,9 +1916,9 @@ def test_leaderboard_orders_caps_and_persists(tmp_path):
 def test_leaderboard_tolerates_corrupt_file(tmp_path):
     path = tmp_path / 'lb.json'
     path.write_text('{nope')
-    assert main.Leaderboard(str(path)).entries == []
+    assert _scores(main.Leaderboard(str(path)).entries) == []
     path.write_text('{"entries": [{"points": "x"}, {"points": 3, "seconds": 9}]}')
-    assert main.Leaderboard(str(path)).entries == [
+    assert _scores(main.Leaderboard(str(path)).entries) == [
         {'name': 'Player', 'points': 3, 'seconds': 9}]
 
 
@@ -1926,7 +1948,7 @@ def test_save_score_once_saves_top_player(kv_game, tmp_path):
     assert game.results_active and screen.saved
     screen.save_score()    # only once
     assert not game.name_active
-    assert game.leaderboard.entries == [
+    assert _scores(game.leaderboard.entries) == [
         {'name': 'Ann', 'points': 9, 'seconds': 30}]
 
 
@@ -2132,15 +2154,92 @@ def test_gamepad_saves_prefilled_nickname(kv_game, tmp_path):
     game._on_joy_button_down(None, 0, 0)     # A: Save is selected first
     game._on_joy_button_up(None, 0, 0)
     assert game.results_active
-    assert game.leaderboard.entries == [
+    assert _scores(game.leaderboard.entries) == [
         {'name': 'Player', 'points': 5, 'seconds': 0}]
 
 
 def test_leaderboard_reads_files_without_names(tmp_path):
     path = tmp_path / 'lb.json'
     path.write_text('{"entries": [{"points": 3, "seconds": 9}]}')
-    assert main.Leaderboard(str(path)).entries == [
+    assert _scores(main.Leaderboard(str(path)).entries) == [
         {'name': 'Player', 'points': 3, 'seconds': 9}]
+
+
+def test_leaderboard_version_1_file_gets_ids_same_order(tmp_path):
+    path = tmp_path / 'lb.json'
+    path.write_text(json.dumps({'version': 1, 'last_name': 'Ann', 'entries': [
+        {'name': 'Ann', 'points': 30, 'seconds': 40},
+        {'name': 'Bob', 'points': 12, 'seconds': 50},
+        {'name': 'Cy', 'points': 12, 'seconds': 50}]}))
+    board = main.Leaderboard(str(path))
+    assert _scores(board.entries) == [
+        {'name': 'Ann', 'points': 30, 'seconds': 40},
+        {'name': 'Bob', 'points': 12, 'seconds': 50},
+        {'name': 'Cy', 'points': 12, 'seconds': 50}]
+    ids = [e['id'] for e in board.entries]
+    assert len(set(ids)) == 3 and all(main.Leaderboard.valid_id(i) for i in ids)
+    assert board.last_name == 'Ann'
+    board.save()
+    data = json.loads(path.read_text())
+    assert data['version'] == 2
+    assert [e['id'] for e in main.Leaderboard(str(path)).entries] == ids
+
+
+def test_leaderboard_merge_adds_once_and_keeps_best(tmp_path):
+    path = str(tmp_path / 'lb.json')
+    board = main.Leaderboard(path)
+    board.add(12, 20, 'Host')
+    phone = [main.Leaderboard.new_entry(30, 61, 'Ann'),
+             main.Leaderboard.new_entry(5, 9, 'Bob')]
+    assert board.merge(phone)
+    assert [e['name'] for e in board.entries] == ['Ann', 'Host', 'Bob']
+    assert not board.merge(phone)               # same ids: nothing new
+    assert not board.merge([dict(e) for e in board.entries])
+    assert len(board.entries) == 3
+    again = main.Leaderboard(path)              # kept after a restart
+    assert [e['name'] for e in again.entries] == ['Ann', 'Host', 'Bob']
+    assert again.last_name == 'Host'            # merging never changes it
+
+
+def test_leaderboard_merge_skips_invalid_entries(tmp_path):
+    board = main.Leaderboard(str(tmp_path / 'lb.json'))
+    assert not board.merge([
+        {'id': 'zz!', 'name': 'Bad', 'points': 1, 'seconds': 1},
+        {'name': 'No id', 'points': 1, 'seconds': 1},
+        {'id': 'ab', 'name': 'Neg', 'points': -1, 'seconds': 1},
+        {'id': 'cd', 'name': 'Str', 'points': '9', 'seconds': 1},
+        {'id': 'ce', 'name': 5, 'points': 1, 'seconds': 1},
+        {'id': '0' * 40, 'name': 'Long id', 'points': 1, 'seconds': 1},
+        'junk'])
+    assert board.entries == []
+    assert board.merge([{'id': 'ef', 'name': '  ' + 'x' * 20, 'points': 2,
+                         'seconds': 3}])
+    assert _scores(board.entries) == [
+        {'name': 'x' * 12, 'points': 2, 'seconds': 3}]
+
+
+def test_leaderboard_merge_beyond_ten_keeps_ten(tmp_path):
+    board = main.Leaderboard(str(tmp_path / 'lb.json'))
+    for i in range(10):
+        board.add(100 + i, 1)
+    assert not board.merge([main.Leaderboard.new_entry(1, 1, 'Low')])
+    assert board.merge([main.Leaderboard.new_entry(500, 1, 'Top')])
+    assert len(board.entries) == 10 and board.entries[0]['name'] == 'Top'
+
+
+def test_leaderboard_version_2_file_readable_by_version_1_logic(tmp_path):
+    # what the previous app version did with the file: only name, points
+    # and seconds of each entry are read, extra fields are ignored
+    path = tmp_path / 'lb.json'
+    board = main.Leaderboard(str(path))
+    board.add(7, 8, 'Ann')
+    data = json.loads(path.read_text())
+    old = [{'name': main.clean_name(e.get('name', main.DEFAULT_NAME)),
+            'points': e['points'], 'seconds': e['seconds']}
+           for e in data['entries'] if isinstance(e, dict)
+           and all(type(e.get(k)) is int and e[k] >= 0
+                   for k in ('points', 'seconds'))]
+    assert old == [{'name': 'Ann', 'points': 7, 'seconds': 8}]
 
 
 def test_pause_stops_the_scrolling_background(kv):
@@ -2153,10 +2252,10 @@ def test_pause_stops_the_scrolling_background(kv):
         assert background is not None
         Clock.tick()
         game.pause()
-        at = background.uv_pos_x_px
+        at = background.shift
         for _ in range(5):
             Clock.tick()
-        assert background.uv_pos_x_px == at
+        assert background.shift == at
         game.resume()
         assert background.animation is not None
     finally:
@@ -2278,9 +2377,24 @@ def test_four_seats_measure_each_axis():
 
 
 def test_touch_seats_follow_the_screen(monkeypatch):
-    assert main.touch_seats() == ('left', 'right')
+    assert main.touch_seats((800, 360)) == ('left', 'right', 'bottom')
     monkeypatch.setattr(main, 'four_seat_screen', lambda *a: True)
     assert main.touch_seats() == ('left', 'right', 'top', 'bottom')
+
+
+@pytest.mark.parametrize('size, seats', [
+    ((800, 360), ('left', 'right', 'bottom')),   # also held with both thumbs
+    ((360, 800), ('top', 'bottom', 'right')),    # and one long edge
+    ((600, 600), ('left', 'right', 'bottom')),   # square counts as wide
+])
+def test_touch_seats_at_the_short_edges(size, seats):
+    assert main.touch_seats(size) == seats
+
+
+@pytest.mark.parametrize('size', [(1280, 800), (800, 1280)])
+def test_touch_seats_four_on_a_big_screen_either_way(monkeypatch, size):
+    monkeypatch.setattr(main, 'four_seat_screen', lambda *a: True)
+    assert main.touch_seats(size) == main.FOUR_SEATS
 
 
 def test_screen_dpi_off_android_is_kivys():
@@ -2342,7 +2456,7 @@ def test_four_touch_sets_share_the_edges(touch4, scale, size, free_corners):
     for layout in layouts:
         layout.size = size
         layout.set_scale(scale)
-        layout.free_corners = free_corners   # a keyboard player is in a corner
+        layout.corners = [0, 1, 2, 3] if free_corners else []
     w, h = size
     margin = main.dp(main.MARGIN_DP)
     corner = main.dp(main.CORNER_DP)
@@ -2431,12 +2545,12 @@ def test_keyboard_player_keeps_a_corner_free(start_game):
     game = start_game(slots=[('touch', 'left'), ('touch', 'top'),
                              ('keys', 0), None])
     layout = game.controls[0].touch_buttons
-    assert layout.free_corners
+    assert layout.corners == [2]
     layout.size = (1920, 1080)
     corner = main.dp(main.CORNER_DP)
     assert layout.fire.y >= corner and layout.stick.top <= 1080 - corner
     touch4 = start_game(slots=TOUCH4)
-    assert not any(c.touch_buttons.free_corners for c in touch4.controls)
+    assert not any(c.touch_buttons.corners for c in touch4.controls)
 
 
 def test_left_and_right_touch_players_keep_the_corners(touch2):
@@ -2563,7 +2677,9 @@ def test_top_and_bottom_status_read_from_their_seat(kv_game):
 @pytest.mark.parametrize('scale', [0.5, 1.0, 4.0])
 def test_keyboard_player_with_a_top_seat_sits_in_a_corner(kv_game,
                                                           window_15x10,
-                                                          scale):
+                                                          scale,
+                                                          monkeypatch):
+    monkeypatch.setattr(main, 'four_seat_screen', lambda *a: True)
     game = kv_game
     game.touch_settings.scale = scale
     game.game_start(slots=[('touch', 'top'), ('touch', 'left'), ('keys', 0),
@@ -2585,7 +2701,9 @@ def test_keyboard_player_with_a_top_seat_sits_in_a_corner(kv_game,
 
 
 def test_keyboard_and_gamepad_corners_follow_player_order(kv_game,
-                                                         window_15x10):
+                                                         window_15x10,
+                                                         monkeypatch):
+    monkeypatch.setattr(main, 'four_seat_screen', lambda *a: True)
     game = kv_game
     game.game_start(slots=[('keys', 0), ('touch', 'bottom'), ('pad', 0),
                            ('keys', 1)])
@@ -2646,8 +2764,8 @@ def test_four_players_join_by_touch_and_start(join4):
         join4.side_buttons[side].dispatch('on_press')
     assert join4.slots == [('touch', 'top'), ('touch', 'left'),
                            ('touch', 'bottom'), ('touch', 'right')]
-    assert join4.panels[0]['device'].text == 'Touch · top side'
-    assert join4.panels[2]['device'].text == 'Touch · bottom side'
+    assert join4.panels[0]['device'].text == 'Touch · top'
+    assert join4.panels[2]['device'].text == 'Touch · bottom'
     for strip in join4.side_buttons.values():
         assert strip.disabled and strip.text.endswith('· touch')
     assert join4.join_touch('top') is None
@@ -2669,18 +2787,20 @@ def test_four_join_strips_hidden_without_touchscreen(kv_game, monkeypatch):
     join = game.select
     assert len(join.side_buttons) == 4
     for strip in join.side_buttons.values():
-        assert strip.opacity == 0 and strip.disabled
+        assert strip.parent is None
     game._on_window_touch(None, None)
     for strip in join.side_buttons.values():
-        assert strip.opacity == 1 and not strip.disabled
+        assert strip.parent is not None and not strip.disabled
     join.side_buttons['bottom'].dispatch('on_press')
     assert join.slots[0] == ('touch', 'bottom')
 
 
-def test_phone_join_screen_keeps_two_strips(kv_game):
+def test_phone_join_screen_strips(kv_game):
+    """A phone held horizontally: the two sides, and the bottom for one
+    player holding it with both thumbs."""
     join = _join(kv_game)
-    assert set(join.side_buttons) == {'left', 'right'}
-    assert 'tap a side' in join.panels[0]['empty'].text
+    assert set(join.side_buttons) == {'left', 'right', 'bottom'}
+    assert 'tap an edge' in join.panels[0]['empty'].text
     assert join.join_touch('top') is None and join.joined == []
 
 
@@ -3602,3 +3722,31 @@ def test_stick_still_navigates_menus(kv_game):
     game._on_joy_axis(None, 0, 1, -32767)               # up
     game._on_joy_axis(None, 0, 1, 0)
     assert game.menu.selected == 0
+
+
+# ---- desktop scale --------------------------------------------------------------
+
+@pytest.mark.parametrize('output, scale', [
+    ('Xft.dpi:\t192\nXft.antialias:\t1\n', 2.0),
+    ('Xft.dpi:\t144\n', 1.5),
+    ('Xft.dpi:\t96\n', 1.0),
+    ('Xcursor.size:\t24\n', 1.0),           # no Xft.dpi
+    ('Xft.dpi:\tlots\n', 1.0),
+    ('Xft.dpi:\t9600\n', 1.0),              # nonsense
+])
+def test_desktop_scale_from_xft_dpi(output, scale):
+    assert main.desktop_scale(lambda: output) == scale
+
+
+def test_desktop_scale_without_libx11():
+    def missing():
+        raise OSError('libX11.so.6: cannot open shared object file')
+    assert main.desktop_scale(missing) == 1.0
+
+
+def test_x_resources_without_a_display(monkeypatch):
+    monkeypatch.setenv('DISPLAY', ':4242')     # no such X server
+    try:
+        assert main.x_resources() == ''
+    except OSError:
+        pytest.skip('no libX11 here')
