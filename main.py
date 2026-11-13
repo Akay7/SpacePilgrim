@@ -1205,6 +1205,15 @@ def touch_seats(size=None):
     return TOUCH_SIDES if width >= height else TALL_SIDES
 
 
+def client_seats(size=None):
+    """The touch seats of a device joining another device's game (a phone
+    joining a TV): as touch_seats, and on a phone held horizontally also
+    the bottom edge, for one player holding it with the joystick and FIRE
+    under the thumbs."""
+    seats = touch_seats(size)
+    return seats + ('bottom',) if seats == TOUCH_SIDES else seats
+
+
 class SoundPool:
     """A few copies of one sound effect, so that it can overlap itself.
     A Kivy Sound restarts when played again, which cuts off the previous
@@ -1399,6 +1408,14 @@ class SpaceshipStatus(Widget):
     # centre of the Pause button between the player's joystick and FIRE,
     # or [] to keep it next to the lives and points (see place_pause)
     pause_spot = ListProperty([])
+    # a client's touch player whose field leaves room at the two ends of
+    # their edge: the controls in its corners, the lives and points beside
+    # the joystick and Pause beside FIRE, toward the middle of the edge
+    ends = BooleanProperty(False)
+    along = NumericProperty(-1)         # with `ends`: the joystick's middle
+    # a client's other players: [x, y, dx, dy], a corner of the block at
+    # (x, y), the block lying toward dx, dy (see Game._band_spots); [] else
+    spot = ListProperty([])
 
     # toward the screen edge of a touch player's seat
     PAUSE_DIRECTIONS = {'left': (-1, 0), 'right': (1, 0), 'top': (0, 1),
@@ -1421,12 +1438,31 @@ class SpaceshipStatus(Widget):
                     'bottom': stick.top - touch_buttons.y,
                 }[self.side]
             pause = self.ids.get('pause')
-            self.pause_spot = self.place_pause(
-                stick, fire, self.side,
-                pause.size if pause is not None else (dp(44), dp(44)))
+            size = pause.size if pause is not None else (dp(44), dp(44))
+            if self.ends and self.side in SEAT_ANGLES:
+                self.along = (stick.center_y if self.side in ('left', 'right')
+                              else stick.center_x)
+                self.pause_spot = self.beside_fire(fire, self.side, size)
+            else:
+                self.along = -1
+                self.pause_spot = self.place_pause(stick, fire, self.side,
+                                                   size)
         for widget in (stick, fire, touch_buttons):
             widget.bind(pos=place, size=place)
+        self.bind(ends=place)
         place()
+
+    def beside_fire(self, fire, side, size):
+        """Centre of the Pause button next to FIRE on the inner side, away
+        from the seat's edge (with `ends`)."""
+        reach = self.PAUSE_GAP + max(size) / 2
+        if side == 'left':
+            return [fire.right + reach, fire.center_y]
+        if side == 'right':
+            return [fire.x - reach, fire.center_y]
+        if side == 'top':
+            return [fire.center_x, fire.y - reach]
+        return [fire.center_x, fire.top + reach]
 
     def place_pause(self, stick, fire, side, size):
         """Centre of the Pause button: midway between the joystick and FIRE
@@ -1455,32 +1491,58 @@ class SpaceshipStatus(Widget):
         """Turn of the text and Pause button: upright from the seat."""
         return SEAT_ANGLES.get(side, 0)
 
+    def screen_boxes(self):
+        """Screen boxes of the lives and points (turned with the seat) and,
+        while shown, of the Pause button."""
+        label = self.ids.get('text_label')
+        if label is None:
+            return []
+        tw, th = label.texture_size
+        if self.side in ('left', 'right'):
+            tw, th = th, tw
+        cx, cy = label.to_window(*label.center)
+        boxes = [(cx - tw / 2, cy - th / 2, cx + tw / 2, cy + th / 2)]
+        pause = self.ids.get('pause')
+        if pause is not None and self.show_menu:
+            x, y = pause.to_window(*pause.pos)
+            boxes.append((x, y, x + pause.width, y + pause.height))
+        return boxes
+
     @staticmethod
-    def two_lines(side, window_width):
-        """Lives above points: in a corner, beside a side, or in the top row
-        of a narrow window."""
-        return (side in ('corner', 'flank')
+    def two_lines(side, window_width, banded=False):
+        """Lives above points: in a corner, beside a side, in the top row
+        of a narrow window, or beside a client's field (`banded`)."""
+        return (banded or side in ('corner', 'flank')
                 or (side == 'row' and window_width < dp(COMPACT_DP)))
 
-    def label_center(self, text_size, window_size, side, inset, column):
+    @staticmethod
+    def spot_center(text_size, spot):
+        """Centre of a block with a corner at `spot` (see `spot`)."""
+        x, y, dx, dy = spot
+        return x + dx * text_size[0] / 2, y + dy * text_size[1] / 2
+
+    def label_center(self, text_size, window_size, side, inset, column,
+                     along=-1):
         """Centre of the lives and points (`text_size` is the unturned
-        texture size: turned a quarter, its height runs across the edge)."""
+        texture size: turned a quarter, its height runs across the edge).
+        A touch player's block is at the middle of their edge, or with
+        `along` given beside their joystick."""
         w, h = window_size
         across = text_size[1] / 2
         if side == 'left':
-            return inset + across, h / 2
+            return inset + across, h / 2 if along < 0 else along
         if side == 'right':
-            return w - inset - across, h / 2
+            return w - inset - across, h / 2 if along < 0 else along
         if side == 'top':
-            return w / 2, h - inset - across
+            return w / 2 if along < 0 else along, h - inset - across
         if side == 'bottom':
-            return w / 2, inset + across
+            return w / 2 if along < 0 else along, inset + across
         if side == 'row':
             if w < dp(COMPACT_DP):
                 # narrow: two lines, two per row in slot order
                 return (w * (column % 2 + 0.5) / 2,
                         h - dp(32) - (column // 2) * dp(52))
-            return w * (column + 0.5) / 4, h - 50
+            return w * (column + 0.5) / 4, h - dp(ROW_DP)
         if side == 'flank':
             # beside the middle of the left and right edges, in slot order:
             # left above, right above, left below, right below
@@ -2017,6 +2079,7 @@ MARGIN_DP = 30    # space between the touch controls and the screen edges
 # four-seat layout with keyboard or gamepad players: free corner squares
 # this big hold their lives and points
 CORNER_DP = 140
+ROW_DP = 50       # the one-line top row's middle below the top edge
 # narrower windows put keyboard and gamepad players' lives and points two
 # per row, in two lines (SpaceshipStatus.label_center)
 COMPACT_DP = 600
@@ -2161,6 +2224,11 @@ class ScreenButtonsLayout(Widget):
     corners = ListProperty([])
     # their lives and points sit beside the middle of the left and right edges
     flank = BooleanProperty(False)
+    # the slots whose lives and points are in the row along the top
+    rows = ListProperty([])
+    # a client's field leaves room at the two ends of this seat's edge: the
+    # controls go into its corners, whatever else is on screen
+    ends = BooleanProperty(False)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -2170,7 +2238,8 @@ class ScreenButtonsLayout(Widget):
         self.fire = FireButton(size=(dp(FIRE_DP), dp(FIRE_DP)), size_hint=(None, None))
         self.add_widget(self.fire)
         self.bind(size=self._layout, edges=self._layout, seats=self._layout,
-                  corners=self._layout, flank=self._layout)
+                  corners=self._layout, flank=self._layout, rows=self._layout,
+                  ends=self._layout)
         self._layout()
 
     def set_scale(self, scale):
@@ -2214,7 +2283,7 @@ class ScreenButtonsLayout(Widget):
         corner, so the two sides are the same turned half a circle. The top
         control sits just below the top row of status text."""
         gap = cm(0.3)
-        top_room = dp(40)
+        top_room = self._top_room()
         stick, fire = (size * self.scale for size in self._base_sizes())
         room_h = max(self.height - margin - top_room - gap, cm(2))
         shrink = min(1.0, room_h / (stick + fire))
@@ -2247,6 +2316,8 @@ class ScreenButtonsLayout(Widget):
         and points stays free."""
         w, h = self.size
         along = w if side in ('top', 'bottom') else h
+        if self.ends:
+            return along / 2 - margin
         taken = set(self.seats) | {side} if self.seats else set(SEAT_ANGLES)
         if self.flank:
             taken |= {'left', 'right'}
@@ -2264,6 +2335,20 @@ class ScreenButtonsLayout(Widget):
         if any(corner in self.corners for corner in self.CORNER_ENDS[side]):
             half = min(half, span / 2 - dp(CORNER_DP) - gap)
         return half
+
+    def _top_room(self):
+        """Room at the top of a side kept for the row of keyboard and
+        gamepad players' lives and points (see SpaceshipStatus.label_center):
+        on a narrow window two lines, two per row; else one line. With
+        `ends` the joystick goes into the corner."""
+        if self.ends:
+            return dp(MARGIN_DP)
+        if not self.rows:
+            return dp(40)
+        if self.width < dp(COMPACT_DP):
+            lowest = dp(32) + max(c // 2 for c in self.rows) * dp(52)
+            return lowest + dp(22) + dp(6)
+        return dp(ROW_DP) + dp(12) + dp(6)
 
     def _edge_sizes(self, margin, gap):
         """Joystick and FIRE size of the edge layout and how far from the
@@ -2695,12 +2780,14 @@ class JoinScreen(BoxLayout):
     STRIP_WIDTH = dp(64)
 
     def __init__(self, colors, bindings, touch=True, seats=TOUCH_SIDES,
-                 lobby=None, net=None, name='', default_name='', **kwargs):
+                 lobby=None, net=None, name='', default_name='',
+                 seats_for=touch_seats, **kwargs):
         super().__init__(spacing=dp(10), **kwargs)
         self.ship_colors = colors
         self.bindings = bindings
         self.touch = touch      # offer joining by touch (side strips)
         self.seats = seats      # touch seats: two short edges, or every edge
+        self.seats_for = seats_for  # the seats for the window's shape
         self.lobby = lobby if lobby is not None else Lobby(colors)
         # network game: the host's or client's session glue. A client only
         # shows the host's slots; its devices ask the host to change them.
@@ -2817,10 +2904,10 @@ class JoinScreen(BoxLayout):
         """The window changed: empty seats move to the short edges of a
         two-seat screen (a seated touch player keeps theirs), then
         everything fits the new size."""
-        if len(self.seats) == 2:
+        if set(self.seats) != set(FOUR_SEATS):
             seated = any(self.slot_of(('touch', side)) is not None
                          for side in self.seats)
-            seats = touch_seats()
+            seats = self.seats_for()
             if not seated and seats != self.seats:
                 self.seats = seats
                 self._place_strips()
@@ -3423,19 +3510,32 @@ class AddressScreen(ButtonColumn):
 
 class FieldView(Widget):
     """A client's view of the host's field: the host's window scaled to fit
-    this one, keeping its proportions and centred, with a faint outline
-    where the field ends. Children are placed in the host's coordinates.
-    The field has its own nebula and scrolling debris, so the background
-    covers the field only, as on the host; outside it the screen is black."""
+    this one, keeping its proportions, with a faint outline where the field
+    ends. Children are placed in the host's coordinates. The field is turned
+    a quarter when that shows it bigger (a wide host on a phone held
+    upright); steering is relative to the ship, so the turn changes nothing
+    in play. The field always shows as big as the window allows. This
+    device's controls and lives and points go into the room beside it
+    (`bands` is told along which axis that room is), and the field moves
+    away from them (`hud`: a function giving their screen boxes), so they
+    sit outside it where they fit; where they do not, they cover its edge.
+    Without them it is centred. The field has its own nebula and scrolling debris, so the
+    background covers the field only, as on the host; outside it the screen
+    is black."""
 
-    def __init__(self, field, **kwargs):
+    def __init__(self, field, hud=None, bands=None, **kwargs):
         super().__init__(**kwargs)
         self.field = tuple(field)
+        self.hud = hud
+        self.bands = bands
         self.scale = 1.0
         self.offset = (0.0, 0.0)
+        self.turned = False
+        self.size_on_screen = (0.0, 0.0)
         with self.canvas.before:
             PushMatrix()
             self._translate = Translate()
+            self._rotate = Rotate(angle=0, origin=(0, 0))
             self._scale = Scale()
         with self.canvas.after:
             Color(1, 1, 1, 0.3)
@@ -3445,7 +3545,11 @@ class FieldView(Widget):
         self.debris = AnimatedBackground()
         self.add_widget(self.nebula)
         self.add_widget(self.debris)
+        # once more on the next frame, after the controls and the lives and
+        # points have followed the window
+        self.refit = Clock.create_trigger(self._fit)
         Window.bind(size=self._fit)
+        Window.bind(size=self.refit)
         self._fit()
 
     def set_field(self, field):
@@ -3454,24 +3558,67 @@ class FieldView(Widget):
             self.field = field
             self._fit()
 
+    @staticmethod
+    def _place(slack, low, high):
+        """Where the field starts along an axis with `slack` to spare and
+        `low` and `high` wanted free before and after it: centred when that
+        leaves both free, else as near the centre as leaves them free, else
+        the slack shared in their proportion."""
+        if low + high <= max(slack, 0):   # (rounding leaves -0.0001)
+            return min(max(slack / 2, low), slack - high)
+        return slack * low / (low + high)
+
+    def _room(self, across, slack):
+        """How much this device's controls and lives and points want free
+        before and after the field along the x (`across`) or y axis: a box
+        on one half of the window that starts within the `slack` from its
+        edge wants the space up to its far side."""
+        size = Window.width if across else Window.height
+        low = high = 0.0
+        for x0, y0, x1, y1 in (self.hud() if self.hud else ()):
+            a, b = (x0, x1) if across else (y0, y1)
+            if b <= size / 2 and a < slack:
+                low = max(low, b)
+            elif a >= size / 2 and size - b < slack:
+                high = max(high, size - a)
+        return low, high
+
     def _fit(self, *args):
         width, height = Window.size
         w, h = (max(1, v) for v in self.field)
-        s = min(width / w, height / h)
+        flat = min(width / w, height / h)
+        turned = min(width / h, height / w)
+        self.turned = turned > flat * 1.001
+        s = turned if self.turned else flat
+        fw, fh = (h * s, w * s) if self.turned else (w * s, h * s)
+        if self.bands is not None:
+            self.bands('x' if width - fw >= height - fh else 'y')
+        self.offset = (
+            self._place(width - fw, *self._room(True, width - fw)),
+            self._place(height - fh, *self._room(False, height - fh)))
         self.scale = s
-        self.offset = ((width - w * s) / 2, (height - h * s) / 2)
-        self._translate.xy = self.offset
+        self.size_on_screen = (fw, fh)
+        # turned a quarter to the left: the field's bottom edge runs up the
+        # right side of its place on screen
+        self._translate.xy = (self.offset[0] + (fw if self.turned else 0),
+                              self.offset[1])
+        self._rotate.angle = 90 if self.turned else 0
         self._scale.xyz = (s, s, 1)
         self._outline.width = max(1.0, dp(1)) / s
         self._outline.rectangle = (0, 0, w, h)
         self.nebula.size = self.debris.size = (w, h)
 
     def to_screen(self, x, y):
-        return (self.offset[0] + self.scale * x,
-                self.offset[1] + self.scale * y)
+        ox, oy = self.offset
+        s = self.scale
+        if self.turned:
+            return ox + self.size_on_screen[0] - s * y, oy + s * x
+        return ox + s * x, oy + s * y
 
     def detach(self):
         Window.unbind(size=self._fit)
+        Window.unbind(size=self.refit)
+        self.refit.cancel()
         self.debris.pause()
 
 
@@ -3533,26 +3680,48 @@ class JoinPrompt(Widget):
     the free touch seats of this device."""
     FULL_TIME = 2.0
 
-    def __init__(self, seats, on_touch_join, **kwargs):
+    def __init__(self, seats, on_touch_join, seats_for=None, **kwargs):
         super().__init__(**kwargs)
         self.label = Label(font_size='18dp', halign='center',
                            size_hint=(None, None))
         self.label.bind(texture_size=self._layout)
         self.add_widget(self.label)
+        self.on_touch_join = on_touch_join
+        self.seats_for = seats_for   # the seats follow the window's shape
         self.strips = {}
-        for side in seats:
-            strip = SideJoinButton(side=side, text='Tap to join',
-                                   size_hint=(None, None))
-            strip.bind(on_press=lambda b: on_touch_join(b.side))
-            self.strips[side] = strip
-            self.add_widget(strip)
+        self._made = {}
+        self._make_strips(seats)
         self.visible = False
         self._full_until = 0
+        self._shown = (False, 0, False, ())
         self.show(False)
         Window.bind(size=self._layout)
         self._layout()
 
+    def _make_strips(self, seats):
+        """The strips of `seats`; a strip made once is kept (hidden while
+        its seat is not offered) for when the window turns back."""
+        for side, strip in self._made.items():
+            if side not in seats:
+                strip.opacity = 0
+                strip.disabled = True
+        self.strips = {}
+        for side in seats:
+            strip = self._made.get(side)
+            if strip is None:
+                strip = SideJoinButton(side=side, text='Tap to join',
+                                       size_hint=(None, None))
+                strip.bind(on_press=lambda b: self.on_touch_join(b.side))
+                self._made[side] = strip
+                self.add_widget(strip)
+            self.strips[side] = strip
+
     def _layout(self, *args):
+        if self.seats_for is not None:
+            seats = tuple(self.seats_for())
+            if seats != tuple(self.strips):
+                self._make_strips(seats)
+                self.show(*self._shown)
         width, height = Window.size
         across = dp(64)
         for side, strip in self.strips.items():
@@ -3568,6 +3737,7 @@ class JoinPrompt(Widget):
         self.label.center = (width / 2, height * 0.3)
 
     def show(self, visible, free=0, touch=False, taken=()):
+        self._shown = (visible, free, touch, taken)
         self.visible = visible
         if Clock.get_time() < self._full_until:
             text = 'The game is full'
@@ -4219,6 +4389,7 @@ class SpacePilgrimGame(Widget):
         self.controls = [None] * controls
         self.joined_at = {}
         self._layout = self._seat_layout(devices)
+        self._band_axis = None
 
     @staticmethod
     def _seat_layout(devices):
@@ -4258,6 +4429,12 @@ class SpacePilgrimGame(Widget):
                             else 'row')
         status = SpaceshipStatus(spaceship=ship, side=side, column=slot,
                                  color=(*cabin_rgb(color), 1))
+        # a client's field keeps clear of the block wherever it goes
+        label = status.ids.get('text_label')
+        if label is not None:
+            label.bind(center=self._refit_field,
+                       texture_size=self._refit_field)
+        status.bind(pause_spot=self._refit_field)
         self.add_widget(status)
         self.statuses.append(status)
         controls = None
@@ -4297,18 +4474,126 @@ class SpacePilgrimGame(Widget):
                 self.statuses.remove(status)
         self._share_seats()
 
+    def _hud_boxes(self):
+        """Screen boxes of this device's touch controls, lives and points
+        and Pause buttons, which a client keeps outside the field."""
+        boxes = []
+        for status in self.statuses:
+            boxes.extend(status.screen_boxes())
+        for controls in self.controls:
+            if controls is not None and controls.touch_buttons.active:
+                for pad in (controls.touch_buttons.stick,
+                            controls.touch_buttons.fire):
+                    x, y = pad.to_window(*pad.pos)
+                    boxes.append((x, y, x + pad.width, y + pad.height))
+        return boxes
+
     def _share_seats(self):
         """Tell every touch player's controls which edges and corners the
         others use, so they reach into the free corners. A seat is taken
-        while its lives and points are shown, also after the last life."""
-        seats = [s.side for s in self.statuses if s.side in SEAT_ANGLES]
-        corners = [s.column for s in self.statuses if s.side == 'corner']
-        flank = any(s.side == 'flank' for s in self.statuses)
+        while its lives and points are shown, also after the last life.
+        A client's field then makes room for them again."""
+        self._place_hud()
+        self._refit_field()
+
+    def _refit_field(self, *args):
+        view = getattr(self, 'field_view', None)
+        if view is not None:
+            view.refit()
+
+    def _field_bands(self, axis):
+        """A client's field leaves its room beside it along the x or y
+        `axis` (FieldView): the lives, points and controls go there."""
+        self._band_axis = axis
+        self._place_hud()
+
+    def _place_hud(self):
+        """Where the lives and points and the touch controls go. On a
+        client with at most one touch player, beside the field: when the
+        room is at the two ends of the player's edge (the bottom without a
+        touch player), the controls go into its corners with the lives and
+        points beside the joystick and Pause beside FIRE; either way the
+        other players' blocks go to the top-left corner, or the corner
+        farthest from the touch controls (_band_spots). Otherwise the blocks
+        keep their places of a local game (row, corners, flank)."""
+        axis = getattr(self, '_band_axis', None)
+        if getattr(self, 'field_view', None) is None:
+            axis = None
+        own = [s for s in self.statuses if s.side in SEAT_ANGLES]
+        banded = axis is not None and len(own) <= 1
+        seat = own[0].side if own else 'bottom'
+        ends = banded and (seat in ('top', 'bottom')) == (axis == 'x')
+        others = sorted((s for s in self.statuses
+                         if s.side not in SEAT_ANGLES),
+                        key=lambda s: s.column)
+        for status in own:
+            status.ends = ends
         for controls in self.controls:
             if controls is not None and controls.side:
-                controls.touch_buttons.seats = seats
-                controls.touch_buttons.corners = corners
-                controls.touch_buttons.flank = flank
+                controls.touch_buttons.ends = ends
+        spots = (self._band_spots(seat, axis, len(others)) if banded
+                 else [[]] * len(others))
+        for status, spot in zip(others, spots):
+            status.spot = spot
+        seats = [s.side for s in own]
+        kept = [s for s in others if not s.spot]
+        corners = [s.column for s in kept if s.side == 'corner']
+        rows = [s.column for s in kept if s.side == 'row']
+        flank = any(s.side == 'flank' for s in kept)
+        for controls in self.controls:
+            if controls is not None and controls.side:
+                buttons = controls.touch_buttons
+                buttons.seats = seats
+                buttons.corners = corners
+                buttons.flank = flank
+                buttons.rows = rows
+
+    BAND_CELL = (130, 50)   # dp: room of one block beside a client's field
+
+    def _band_spots(self, seat, axis, count):
+        """Corners for `count` blocks beside a client's field, one after the
+        other: from the top-left corner, or when the touch player's controls
+        are there (a seat at the top or left edge) from the corner farthest
+        from them, stacked into the room beside the field (down it when the
+        room is along `axis` x, else across it), or the other way when that
+        would reach the touch controls."""
+        w, h = Window.size
+        m = dp(MARGIN_DP) / 2
+        x, y, dx, dy = {'top': (m, m, 1, 1),
+                        'left': (w - m, h - m, -1, -1)}.get(
+                            seat, (m, h - m, 1, -1))
+        cell_w, cell_h = (dp(v) for v in self.BAND_CELL)
+
+        def stack(down):
+            return [[x, y + dy * k * cell_h, dx, dy] if down
+                    else [x + dx * k * cell_w, y, dx, dy]
+                    for k in range(count)]
+
+        taken = []
+        for status in self.statuses:
+            if status.side in SEAT_ANGLES:
+                taken.extend(status.screen_boxes())
+        for controls in self.controls:
+            if controls is not None and controls.side:
+                for pad in (controls.touch_buttons.stick,
+                            controls.touch_buttons.fire):
+                    px, py = pad.to_window(*pad.pos)
+                    taken.append((px, py, px + pad.width, py + pad.height))
+
+        def clear(spots):
+            for sx, sy, sdx, sdy in spots:
+                box = (min(sx, sx + sdx * cell_w), min(sy, sy + sdy * cell_h),
+                       max(sx, sx + sdx * cell_w), max(sy, sy + sdy * cell_h))
+                if any(box[0] < b[2] and b[0] < box[2] and box[1] < b[3]
+                       and b[1] < box[3] for b in taken):
+                    return False
+            return True
+        spots = stack(axis == 'x')
+        if not clear(spots):
+            other = stack(axis != 'x')
+            if clear(other):
+                spots = other
+        return spots
 
     SAFE_DISTANCE = 200   # px from a late ship to every asteroid
 
@@ -4364,6 +4649,9 @@ class SpacePilgrimGame(Widget):
                 for status in self.statuses:
                     if status.column == slot:
                         status.show_menu = visible
+        view = getattr(self, 'field_view', None)
+        if view is not None:
+            view.refit()
 
     def _on_window_touch(self, window, touch):
         self._set_touch_ui(True)
@@ -4958,7 +5246,8 @@ class SpacePilgrimGame(Widget):
         net = self.net
         self.select = JoinScreen(
             net.colors, self.bindings, touch=self.has_touch,
-            seats=touch_seats(), lobby=net.lobby, net=net)
+            seats=client_seats(), seats_for=client_seats, lobby=net.lobby,
+            net=net)
         self.select.flashing = list(net.flash)
         self.add_widget(self.select)
         self._client_join_info()
@@ -5095,8 +5384,10 @@ class SpacePilgrimGame(Widget):
         if not self.in_net_game or self.net is None:
             return
         if prompt is None:
+            seats = client_seats if self._joined_client else touch_seats
             self.prompt = prompt = JoinPrompt(
-                touch_seats(), lambda side: self.net_join(('touch', side)))
+                seats(), lambda side: self.net_join(('touch', side)),
+                seats_for=seats)
             self.add_widget(prompt)
         lobby = self.net.lobby
         # only a machine without a player in this game may still join
@@ -5115,7 +5406,8 @@ class SpacePilgrimGame(Widget):
         slots = self.net.lobby.slots
         self._begin_round(slots, slots, MAX_PLAYERS, message['elapsed'],
                           net=True)
-        self.field_view = FieldView(message['field'])
+        self.field_view = FieldView(message['field'], hud=self._hud_boxes,
+                                    bands=self._field_bands)
         self._screen_background(False)
         self.add_widget(self.field_view)
         self._inputs_down.clear()

@@ -771,3 +771,21 @@ def test_controls_keep_their_order_on_a_tiny_window(game, monkeypatch, slots):
         else:
             assert fire.right < stick.x
         assert not _overlap(box(stick), box(fire))
+
+
+@pytest.mark.parametrize('size', [(1600, 720), (800, 600), (800, 360),
+                                  (640, 360)])
+@pytest.mark.parametrize('slots', [
+    [('keys', 0), ('touch', 'left')],
+    [('touch', 'left'), ('keys', 0), ('touch', 'right'), ('pad', 0)],
+    [('pad', 0), ('pad', 1), ('keys', 0), ('touch', 'right')],
+])
+def test_top_row_clear_of_side_controls(game, size, slots):
+    """Keyboard and gamepad players' lives and points along the top stay
+    clear of the touch controls at the left and right sides."""
+    with window(*size):
+        game.game_start(slots=slots)
+        texts = _text_boxes(game)
+        for pad in _pads(game):
+            for text in texts:
+                assert not _overlap(text, pad), (text, pad)

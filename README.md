@@ -60,7 +60,7 @@ Several devices on the same Wi-Fi can play one game, each player looking at thei
 - **Local network: On** hosts the game: the players already joined keep their slots, the screen shows the address (for example `Hosting on 192.168.1.20:47400`), and other devices can find the game.
 - **Join a network game** lists the games found on the Wi-Fi; pick one to join. **Enter address** joins by `IP` or `IP:port` when the list stays empty (some networks block broadcasts).
 
-The host runs the game and the other devices show its field, scaled to fit their screen. Every device joins players with its own keyboard sets, gamepads and touch strips, and each slot shows which device it is on (`Gamepad 1 · Pixel 8`). The host does not need a player of its own, so a TV can be the shared screen.
+The host runs the game and the other devices show its field, scaled to fit their screen and turned when that shows it bigger (a TV's field on a phone held upright); their own controls and lives and points sit beside it where there is room. Every device joins players with its own keyboard sets, gamepads and touch strips, and each slot shows which device it is on (`Gamepad 1 · Pixel 8`). The host does not need a player of its own, so a TV can be the shared screen.
 
 - **Joining and leaving during a game**: a device can connect at any time. A device with no player in the game takes a free slot with FIRE or *Tap to join*. A device that has a player adds no more until the game ends, and a destroyed player stays out. *Main menu* on the pause screen, or closing the app, leaves the game; when the host leaves, the game ends for everybody.
 - **Pause** on any device pauses every device, and *Continue* on any device resumes.
@@ -205,7 +205,7 @@ This renders the store screenshots from the game itself into `store/play/`: five
 
 ### 0.6.0
 
-- network game: one game on several phones, tablets, PCs and TVs on the same Wi-Fi, each player looking at their own screen; the host runs the game and the other devices show its field, scaled to fit
+- network game: one game on several phones, tablets, PCs and TVs on the same Wi-Fi, each player looking at their own screen; the host runs the game and the other devices show its field, scaled and turned to fit
 
 - *Local network: On* on the Multiplayer join screen hosts the game; *Join a network game* finds games on the local network, or joins one by address when broadcasts are blocked
 

@@ -52,6 +52,65 @@ Every screen and a running game SHALL fit the current window, down to a 360 dp w
 - **WHEN** a host tablet in landscape turns to portrait during a network game
 - **THEN** each client shows the portrait field, scaled to fit, with black bars beside it
 
+### Requirement: A client's field uses its screen
+A device that shows another device's game (a network client) SHALL show the whole host field at the biggest size its window allows, keeping the field's proportions, and SHALL turn the field a quarter when that shows it bigger.
+
+#### Scenario: Wide host on a phone held upright
+- **WHEN** the host's field is 1280 x 720 and a client's window is 720 x 1600, held upright
+- **THEN** the client shows the field turned a quarter, filling the window's width, with nothing of the field cut off
+
+#### Scenario: Turning shows it smaller
+- **WHEN** the host's field is 1600 x 900 and a client's window is 1024 x 768
+- **THEN** the field is not turned
+
+### Requirement: A client's controls sit beside its field
+Where a client's field leaves room beside it, the field SHALL keep its biggest size and be placed so that this device's touch controls, Pause buttons and lives and points are outside it where they fit; otherwise it SHALL be centred. Those that do not fit MAY cover the field's edges; the field SHALL NOT be made smaller for them. The field SHALL be placed again when the window changes or a player joins or leaves.
+
+#### Scenario: Controls beside the field
+- **WHEN** a client with a 1600 x 720 window shows a 1280 x 800 field and its touch player sits at the left
+- **THEN** the field moves right, and the player's joystick, FIRE, Pause button and lives and points are left of it
+
+#### Scenario: Controls below a turned field
+- **WHEN** a client held upright at 720 x 1600 shows a 1280 x 720 field and its touch player sits at the bottom
+- **THEN** the field is turned and moved up, and the player's controls and lives and points are below it
+
+#### Scenario: Controls cover the edge of a field that fills the screen
+- **WHEN** a client's field fills its window with no room beside it
+- **THEN** the field keeps its size and the controls cover its edge
+
+#### Scenario: Nothing to make room for
+- **WHEN** a client without touch players shows a square field in a wide window
+- **THEN** the field is centred
+
+### Requirement: A client's touch controls go into the room
+On a client with one touch player, when the room beside the field is at the two ends of the player's edge, the joystick and FIRE SHALL be in the corners of that edge, the player's lives and points beside the joystick and Pause beside FIRE, toward the middle of the edge.
+
+#### Scenario: Controls at the ends of the edge
+- **WHEN** a touch player sat at the bottom of a phone held upright, then turned it to 900 x 415 dp, and the phone shows a 1920 x 1080 field
+- **THEN** the field keeps its biggest size, the joystick and FIRE are in the bottom corners, the lives and points above the joystick and Pause above FIRE, mostly in the room left and right of the field
+
+### Requirement: A client's other players at the top left
+On a client with at most one touch player, the lives and points of keyboard, gamepad and other devices' players SHALL be upright, two lines each, in the top-left corner, one after another in player order into the room beside the field. When this device's touch controls are in that corner (a seat at the top or left edge), the blocks SHALL go to the corner farthest from them: bottom-left for a top seat, top-right for a left seat. No block SHALL overlap a touch control.
+
+#### Scenario: Blocks at the top left
+- **WHEN** a client with a touch player at the bottom shows two players of other devices
+- **THEN** both blocks are in the top-left corner, one under the other, clear of the joystick
+
+#### Scenario: Touch controls in the top-left corner
+- **WHEN** a client held upright has a touch player at the top, whose FIRE is in the top-left corner, and two players of other devices
+- **THEN** their blocks are in the bottom-left corner, clear of the touch controls
+
+### Requirement: A phone joining a game can be held horizontally
+A two-seat device joining another device's game SHALL offer, when held horizontally, a touch seat at the bottom edge besides the left and right ones, on its join screen and in the "Tap to join" strips while watching, so one player can hold it with the joystick under the left thumb and FIRE under the right. Held upright it SHALL offer the top and bottom seats as before. The offered seats SHALL follow the device as it turns while nobody of it sits. A local game SHALL keep the two short edges.
+
+#### Scenario: Phone joins a TV held horizontally
+- **WHEN** a phone held horizontally opens the join screen of a TV's game
+- **THEN** "Tap to join by touch" strips are at the left, right and bottom edges, and a player who taps the bottom one plays with the joystick in the bottom-left and FIRE in the bottom-right corner
+
+#### Scenario: Watching phone turns
+- **WHEN** a phone watching a TV's game is turned from upright to horizontal
+- **THEN** the "Tap to join" strips move from the top and bottom edges to the left, right and bottom edges
+
 ### Requirement: Text boxes stay above the on-screen keyboard
 When an on-screen keyboard opens for a text box, the game SHALL move its picture up just enough that the text box being typed in is fully visible above the keyboard, and SHALL move it back when the keyboard closes. Where the box is already above the keyboard, nothing SHALL move.
 

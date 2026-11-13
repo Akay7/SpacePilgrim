@@ -5,7 +5,10 @@ faked; the TCP sessions are real."""
 import json
 import socket
 
+import math
+
 import pytest
+from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.lang import Builder
 from kivy.metrics import dp
@@ -969,6 +972,63 @@ def test_watch_tap_to_join_at_the_left_seat(env):
     assert not watcher.prompt.visible
 
 
+def test_client_seats_add_the_bottom_on_a_phone_held_horizontally():
+    """A phone joining another device's game also offers the bottom edge
+    when held horizontally; a local game keeps the two short edges."""
+    assert main.client_seats((800, 400)) == ('left', 'right', 'bottom')
+    assert main.client_seats((400, 800)) == ('top', 'bottom')
+    assert main.touch_seats((800, 400)) == ('left', 'right')
+
+
+def test_client_join_screen_offers_the_bottom(env):
+    host = env.host()
+    client = env.client(host)
+    assert Window.width > Window.height
+    assert set(client.select.side_buttons) == {'left', 'right', 'bottom'}
+    client.has_touch = True
+    client.select.side_buttons['bottom'].dispatch('on_press')
+    env.pump()
+    assert any(slot is not None and slot[2] == ('touch', 'bottom')
+               for slot in host.net.lobby.slots)
+
+
+def test_watch_tap_to_join_at_the_bottom_held_horizontally(env):
+    """One player holding a phone horizontally: joystick under the left
+    thumb, FIRE under the right."""
+    host, client = started(env)
+    watcher = env.client(host)
+    watcher.has_touch = True
+    env.frames(host)
+    assert Window.width > Window.height
+    strip = watcher.prompt.strips['bottom']
+    assert strip.opacity == 1 and not strip.disabled
+    strip.dispatch('on_press')
+    env.pump()
+    assert host.net.lobby.slots[2] == ('net', 2, ('touch', 'bottom'))
+    env.frames(host)
+    buttons = watcher.controls[2].touch_buttons
+    assert watcher.controls[2].side == 'bottom' and buttons.active
+    assert buttons.stick.center_x < Window.width / 2 < buttons.fire.center_x
+    assert buttons.stick.y < Window.height / 3
+
+
+def test_watch_prompt_seats_follow_the_phone(env):
+    host, client = started(env)
+    watcher = env.client(host)
+    watcher.has_touch = True
+    env.frames(host)
+    old = Window.size
+    try:
+        Window.size = (400, 800)
+        assert set(watcher.prompt.strips) == {'top', 'bottom'}
+        Window.size = (800, 400)
+        assert set(watcher.prompt.strips) == {'left', 'right', 'bottom'}
+        assert all(strip.opacity == 1
+                   for strip in watcher.prompt.strips.values())
+    finally:
+        Window.size = old
+
+
 def test_client_touch_player_out_of_lives_loses_pause(env):
     """A client's touch player who loses the last life keeps the lives and
     points on that client, but no Pause button."""
@@ -1299,16 +1359,204 @@ def test_field_follows_the_host_window(env):
         Window.size = old
 
 
+def _turn_point(view, x, y):
+    """Where the view's canvas instructions put the field point (x, y)."""
+    s = view.scale
+    a = math.radians(view._rotate.angle)
+    X, Y = s * x, s * y
+    tx, ty = view._translate.xy
+    return (tx + X * math.cos(a) - Y * math.sin(a),
+            ty + X * math.sin(a) + Y * math.cos(a))
+
+
+@pytest.mark.parametrize('window_size, field, turned', [
+    ((720, 1600), (1280, 720), True),     # a TV on a phone held upright
+    ((1600, 720), (720, 1280), True),     # an upright host on a wide screen
+    ((1600, 720), (1280, 720), False),
+    ((1024, 768), (1600, 900), False),    # turning would show it smaller
+])
+def test_field_view_turns_when_bigger(env, window_size, field, turned):
+    old = Window.size
+    Window.size = window_size
+    try:
+        view = main.FieldView(field)
+        width, height = window_size
+        w, h = field
+        flat = min(width / w, height / h)
+        assert view.turned == turned
+        assert view.scale == pytest.approx(
+            max(flat, min(width / h, height / w)))
+        corners = [view.to_screen(x, y) for x in (0, w) for y in (0, h)]
+        for x, y in corners:
+            assert -0.01 <= x <= width + 0.01 and -0.01 <= y <= height + 0.01
+        # the drawing and to_screen agree
+        for x, y in ((0, 0), (w, 0), (0, h), (w / 4, h / 3)):
+            assert _turn_point(view, x, y) == pytest.approx(
+                view.to_screen(x, y))
+        view.detach()
+    finally:
+        Window.size = old
+
+
+def _hud_outside(game, view, axis):
+    """Every touch control and every lives and points block of `game`
+    is beside the field along `axis` (0: x, 1: y)."""
+    lo = view.offset[axis]
+    hi = lo + view.size_on_screen[axis]
+    pads = [(c.touch_buttons.stick, c.touch_buttons.fire)
+            for c in game.controls if c is not None and c.side]
+    assert pads
+    boxes = []
+    for stick, fire in pads:
+        for pad in (stick, fire):
+            x, y = pad.to_window(*pad.pos)
+            boxes.append((x, y, x + pad.width, y + pad.height))
+    for status in game.statuses:              # also other players' blocks
+        boxes.extend(status.screen_boxes())
+    for box in boxes:
+        a, b = (box[0], box[2]) if axis == 0 else (box[1], box[3])
+        assert b <= lo + 0.5 or a >= hi - 0.5, (box, lo, hi)
+
+
+@pytest.mark.parametrize('window_size, field, seat, axis', [
+    ((1600, 720), (1280, 800), 'left', 0),
+    ((1600, 720), (1280, 800), 'right', 0),
+    ((720, 1600), (1280, 720), 'bottom', 1),     # turned, room below
+    ((720, 1600), (1280, 720), 'top', 1),
+])
+def test_client_field_makes_room_for_the_controls(env, window_size, field,
+                                                  seat, axis):
+    """Where the field leaves room beside it, the client's own touch
+    controls, lives and points sit outside the field."""
+    old = Window.size
+    Window.size = window_size
+    try:
+        host, client = started(env)
+        watcher = env.client(host)
+        watcher.has_touch = True
+        env.frames(host)
+        watcher.prompt.strips[seat].dispatch('on_press')
+        env.pump()
+        env.frames(host)
+        view = watcher.field_view
+        view.set_field(field)
+        view._fit()
+        _hud_outside(watcher, view, axis)
+        # the whole field is still shown
+        assert view.offset[axis] >= -0.01
+        assert (view.offset[axis] + view.size_on_screen[axis]
+                <= window_size[axis] + 0.01)
+    finally:
+        Window.size = old
+
+
+def _box_overlap(a, b):
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+
+def test_client_controls_at_the_ends_of_the_edge(env):
+    """A touch player sat at the bottom of a phone held upright, then turned
+    it: the TV's field shows as big as it can, with room left and right.
+    The joystick and FIRE go into the bottom corners, the lives and points
+    above the joystick, Pause above FIRE, and the other players' blocks
+    into the top-left corner, one under the other, so they cover the field
+    less."""
+    old = Window.size
+    Window.size = (415, 900)
+    try:
+        host, client = started(env)
+        watcher = env.client(host)
+        watcher.has_touch = True
+        env.frames(host)
+        watcher.prompt.strips['bottom'].dispatch('on_press')
+        env.pump()
+        env.frames(host)
+        Window.size = (900, 415)
+        view = watcher.field_view
+        view.set_field((1920, 1080))
+        Clock.tick()
+        view._fit()
+        # the field keeps its biggest size
+        assert view.scale == pytest.approx(min(900 / 1920, 415 / 1080))
+        controls = next(c for c in watcher.controls
+                        if c is not None and c.side)
+        buttons = controls.touch_buttons
+        stick, fire = buttons.stick, buttons.fire
+        margin = dp(main.MARGIN_DP)
+        assert buttons.ends
+        assert stick.x == pytest.approx(margin)
+        assert fire.right == pytest.approx(900 - margin)
+        own = next(s for s in watcher.statuses if s.side == 'bottom')
+        label, pause = own.screen_boxes()
+        assert (label[0] + label[2]) / 2 == pytest.approx(stick.center_x)
+        assert label[1] >= stick.top
+        assert (pause[0] + pause[2]) / 2 == pytest.approx(fire.center_x)
+        assert pause[1] >= fire.top
+        others = [s for s in watcher.statuses if s.side != 'bottom']
+        assert others
+        boxes = [label, pause] + [(w.x, w.y, w.right, w.top)
+                                  for w in (stick, fire)]
+        for status in others:
+            box, = status.screen_boxes()
+            assert box[1] > 415 / 2 and box[2] < 900 / 4    # top left
+            assert not any(_box_overlap(box, b) for b in boxes)
+            boxes.append(box)
+    finally:
+        Window.size = old
+
+
+def test_client_blocks_keep_away_from_top_controls(env):
+    """A touch player at the top has FIRE in the top-left corner: the other
+    players' blocks go to the farthest corner from it, the bottom left."""
+    old = Window.size
+    Window.size = (415, 900)
+    try:
+        host, client = started(env)
+        watcher = env.client(host)
+        watcher.has_touch = True
+        env.frames(host)
+        watcher.prompt.strips['top'].dispatch('on_press')
+        env.pump()
+        env.frames(host)
+        watcher.field_view.set_field((1920, 1080))
+        Clock.tick()
+        buttons = next(c for c in watcher.controls
+                       if c is not None and c.side).touch_buttons
+        pads = [(w.x, w.y, w.right, w.top)
+                for w in (buttons.stick, buttons.fire)]
+        others = [s for s in watcher.statuses if s.side != 'top']
+        assert len(others) == 2
+        for status in others:
+            box, = status.screen_boxes()
+            assert box[3] < 900 / 4 and box[0] < 415 / 2     # bottom left
+            assert not any(_box_overlap(box, b) for b in pads)
+    finally:
+        Window.size = old
+
+
+def test_client_field_stays_centred_without_controls(env):
+    host, client = started(env)
+    view = client.field_view
+    view.set_field((800, 800))
+    view._fit()
+    width, height = Window.size
+    side = min(width, height)
+    assert view.offset == pytest.approx(((width - side) / 2,
+                                         (height - side) / 2), abs=0.5)
+
+
 def test_field_follows_the_client_window(env):
     host, client = started(env)
     old = Window.size
     try:
         view = client.field_view
         view.set_field((1280, 800))           # a wide host
-        Window.size = (800, 1280)             # the client's window turns
-        assert view.scale == pytest.approx(800 / 1280)
-        assert view.offset == pytest.approx((0, (1280 - 500) / 2))
+        Window.size = (800, 1280)             # the client's window turns:
+        assert view.turned                    # so does the field, filling it
+        assert view.scale == pytest.approx(1)
+        assert view.offset == pytest.approx((0, 0))
         Window.size = (1280, 800)
+        assert not view.turned
         assert view.scale == pytest.approx(1)
         assert view.offset == pytest.approx((0, 0))
     finally:

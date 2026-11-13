@@ -110,6 +110,10 @@ During a multiplayer game each player's lives and points SHALL be shown in a sep
 - **WHEN** a game runs with touch players at the top and left and keyboard set 1 as player 3
 - **THEN** player 3's block is upright in the bottom-left corner and overlaps no touch control
 
+#### Scenario: Keyboard player with a left touch seat
+- **WHEN** a game runs at 800 x 360 dp with keyboard set 1 as player 1 and a touch player at the left
+- **THEN** player 1's block is at the top and the left player's joystick starts below it, without overlapping
+
 #### Scenario: Gamepad players on a phone held upright
 - **WHEN** a game with two gamepad players and two keyboard sets runs on a 360 x 800 dp phone, with points up to 12345
 - **THEN** the four blocks are at the top, two per row, each with lives above points, all inside the window and none overlapping another

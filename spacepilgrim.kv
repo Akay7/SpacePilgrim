@@ -64,7 +64,8 @@
         # touch player at the middle of their edge, just inside their touch
         # controls, turned to read from their seat; keyboard and gamepad
         # players in the top row or the corners, in player order
-        center: root.label_center(self.texture_size, Window.size, root.side, root.inset, root.column)
+        # a client's players: beside the field (Game._place_hud)
+        center: root.spot_center(self.texture_size, root.spot) if root.spot else root.label_center(self.texture_size, Window.size, root.side, root.inset, root.column, root.along)
         canvas.before:
             PushMatrix
             Rotate:
@@ -73,8 +74,8 @@
         canvas.after:
             PopMatrix
         color: root.color
-        text: ("Lives {}\nPoints {}" if root.two_lines(root.side, Window.width) else "Lives {}  Points {}" if root.side == 'row' else "Lives {:<5} Points {}").format(root.spaceship.lives, root.spaceship.points)
-        font_size: "17dp" if root.side in ('row', 'corner', 'flank') else "23dp"
+        text: ("Lives {}\nPoints {}" if root.two_lines(root.side, Window.width, root.ends or bool(root.spot)) else "Lives {}  Points {}" if root.side == 'row' else "Lives {:<5} Points {}").format(root.spaceship.lives, root.spaceship.points)
+        font_size: "17dp" if root.side in ('row', 'corner', 'flank') or root.ends or root.spot else "23dp"
         font_name: 'data/fonts/RobotoMono-Regular.ttf'
 
     PauseButton:
