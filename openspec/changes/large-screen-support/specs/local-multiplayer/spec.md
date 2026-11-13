@@ -2,12 +2,55 @@
 
 ## MODIFIED Requirements
 
+### Requirement: Join with a device
+The join screen SHALL show four player slots. Pressing FIRE on a keyboard set or gamepad that has not joined SHALL take the first free slot with that device. On a device with a touchscreen, or once the game has received a touch, the join screen SHALL show a "Tap to join by touch" strip at the edge of each open touch seat (see Touch seats). Activating a strip SHALL take the first free slot with touch as a player at that seat. On a device without a touchscreen that has received no touch (such as Android TV), the strips SHALL NOT be shown. A keyboard set or gamepad SHALL hold at most one slot. There SHALL be two keyboard sets, so at most two players play on one keyboard.
+
+#### Scenario: Two touch players at most
+- **WHEN** two players have joined by touch on a screen that is not big enough for four touch seats
+- **THEN** both side strips are disabled and name the player on that side until one of them leaves
+
+#### Scenario: Four touch players on a big screen
+- **WHEN** four players have joined by touch on a big enough screen, one at each edge
+- **THEN** all four strips are disabled and each names the player at that edge, and the game can start with four touch players
+
+#### Scenario: Keyboard set joins
+- **WHEN** nobody has joined and someone presses Space
+- **THEN** player 1's slot shows "Keyboard 1", with its keys W A D Space in the hint below
+
+#### Scenario: Gamepad joins the next slot
+- **WHEN** keyboard set 1 holds player 1's slot and a gamepad presses its fire button
+- **THEN** player 2's slot shows that a gamepad has joined
+
+#### Scenario: Touch joins a chosen slot
+- **WHEN** player 1 has joined by keyboard and a player taps the strip at the right edge
+- **THEN** player 2's slot shows "Touch · right" and the other slots are unchanged
+
+#### Scenario: Touch joins at the top
+- **WHEN** player 1 has joined by keyboard on a big enough screen and a player taps the strip at the top edge
+- **THEN** player 2's slot shows "Touch · top"
+
+#### Scenario: A device joins once
+- **WHEN** keyboard set 1 has joined and Space is pressed again
+- **THEN** no other slot is taken and player 1 toggles ready
+
+#### Scenario: No strips on a TV
+- **WHEN** the join screen opens on an Android TV without a touchscreen
+- **THEN** no "Tap to join by touch" strip is shown and the empty slots only ask for FIRE on keys or a gamepad
+
+#### Scenario: Strips appear on the first touch
+- **WHEN** the join screen is open on a device without a touchscreen and the game receives a touch
+- **THEN** the "Tap to join by touch" strips of all touch seats appear
+
+#### Scenario: Short texts on a narrow panel
+- **WHEN** the join screen opens on a 360 x 640 dp phone with a touch player at the right edge and keyboard set 1 joined
+- **THEN** the slots show "Touch · right" and "Keyboard 1" whole, and the empty slots "Press FIRE on keys or a gamepad" and "or tap an edge to play by touch" inside their panels
+
 ### Requirement: Touch seats
-Players on the touch screen SHALL sit at the edges of the screen, facing the centre: at most two at the short edges of the window (left and right on a wide window, top and bottom on a tall one), or on a big enough screen at most four, one per edge (left, right, top, bottom). While no touch player sits, the two seats SHALL move to the short edges when the window changes shape; a seated player SHALL keep their edge. A player who joins by touch SHALL sit at the edge whose join strip they tapped, and the joined slot SHALL name that side. Every text and control of a seat (join strip label, FIRE label, status block, Pause button) SHALL read upright from that seat: left turned −90°, right 90°, top 180°, bottom upright.
+Players on the touch screen SHALL sit at the edges of the screen, facing the centre, with the same seats on every join screen (a local game, a hosted one, one joined from another device, and the "Tap to join" strips while watching): on a big enough screen one per edge (left, right, top, bottom); else the two short edges, for two players facing each other, and one long edge, for one player holding the device with the joystick and FIRE under the thumbs: on a wide window left, right and bottom; on a tall window top, bottom and right (where a player's bottom is who turns the phone sideways, top to the left, while the screen stays upright). The long-edge seat and the short-edge seats SHALL NOT be taken together. While no touch player sits, the seats SHALL follow the window when it changes shape; a seated player SHALL keep their edge. A player who joins by touch SHALL sit at the edge whose join strip they tapped, and the joined slot SHALL name that side. Every text and control of a seat (join strip label, FIRE label, status block, Pause button) SHALL read upright from that seat: left turned −90°, right 90°, top 180°, bottom upright.
 
 #### Scenario: Touch players take their side
 - **WHEN** one player taps the right strip and then another taps the left strip
-- **THEN** player 1's slot shows "Touch · right side" and player 2's slot "Touch · left side"
+- **THEN** player 1's slot shows "Touch · right" and player 2's slot "Touch · left"
 
 #### Scenario: Side freed by leaving
 - **WHEN** the left touch player leaves
@@ -19,18 +62,34 @@ Players on the touch screen SHALL sit at the edges of the screen, facing the cen
 
 #### Scenario: Phone held upright
 - **WHEN** the join screen opens on a phone held in portrait
-- **THEN** "Tap to join by touch" strips are shown at the top and bottom edges, and a player who taps the top strip gets "Touch · top side"
+- **THEN** "Tap to join by touch" strips are shown at the top, bottom and right edges, and a player who taps the top strip gets "Touch · top" and the right strip is hidden
+
+#### Scenario: Phone held horizontally by one player
+- **WHEN** the join screen opens on a phone held in landscape and a player taps the bottom strip
+- **THEN** the player gets "Touch · bottom", the left and right strips are hidden, and in the game their joystick is in the bottom-left and FIRE in the bottom-right corner
+
+#### Scenario: Side player closes the bottom seat
+- **WHEN** a player taps the left strip on a phone held in landscape
+- **THEN** the bottom strip is hidden and the right strip can still be tapped; when the player leaves, the bottom strip is shown again
+
+#### Scenario: Phone joining a TV
+- **WHEN** a phone held in landscape opens the join screen of a TV's game, or watches it running
+- **THEN** "Tap to join" strips are at its left, right and bottom edges, as on its own join screen
 
 #### Scenario: Empty seats follow a turn
 - **WHEN** nobody sits by touch on a phone's join screen in landscape and the phone turns to portrait
-- **THEN** the strips move from the left and right edges to the top and bottom edges
+- **THEN** the strips move from the left, right and bottom edges to the top, bottom and right edges
+
+#### Scenario: Phone turned sideways with the screen upright
+- **WHEN** a player taps the right strip of a phone held in portrait
+- **THEN** the top and bottom strips are hidden, and in the game the player's joystick is at the bottom and FIRE at the top of the right edge
 
 #### Scenario: Seated player keeps the edge
 - **WHEN** a touch player sits at the left edge on a phone's join screen in landscape and the phone turns to portrait
 - **THEN** the player keeps the left seat, with the strip still at the left edge
 
 ### Requirement: Four touch seats on a big screen
-A screen SHALL count as big enough for four touch seats when its landscape size is at least 15 cm wide and 10 cm high, measured physically, not in pixels. The check SHALL be automatic, with no setting. On a big enough screen there SHALL be four touch seats, one per screen edge: left, right, top and bottom. On a smaller screen there SHALL be only the two seats at the short edges of the window: left and right on a wide window, top and bottom on a tall one.
+A screen SHALL count as big enough for four touch seats when its landscape size is at least 15 cm wide and 10 cm high, measured physically, not in pixels. The check SHALL be automatic, with no setting. On a big enough screen there SHALL be four touch seats, one per screen edge: left, right, top and bottom. On a smaller screen there SHALL be the seats at the short edges of the window and one long-edge seat (see Touch seats).
 
 #### Scenario: Tablet offers four seats
 - **WHEN** the join screen opens on a tablet whose screen is 21 cm × 13 cm
@@ -38,11 +97,11 @@ A screen SHALL count as big enough for four touch seats when its landscape size 
 
 #### Scenario: Phone keeps two seats
 - **WHEN** the join screen opens on a phone whose screen is 15 cm × 7 cm, held in landscape
-- **THEN** strips are shown only at the left and right edges, as before
+- **THEN** strips are shown at the left, right and bottom edges, not at the top
 
 #### Scenario: Small tablet keeps two seats
 - **WHEN** the join screen opens on a tablet whose screen is 15.5 cm × 8.7 cm, held in landscape
-- **THEN** strips are shown only at the left and right edges
+- **THEN** strips are shown at the left, right and bottom edges, not at the top
 
 #### Scenario: Tablet held upright keeps four seats
 - **WHEN** the join screen opens on a tablet whose screen is 13 cm × 21 cm, held in portrait
@@ -92,7 +151,7 @@ A touch player's joystick and FIRE SHALL be at the two ends of their edge, the j
 - **THEN** the bottom player's controls move away from the corners, clear of the left player's controls, lives and points
 
 ### Requirement: Players are told apart on screen
-During a multiplayer game each player's lives and points SHALL be shown in a separate status block tinted with the colour of that player's cabin. A touch player's block SHALL be at the middle of their edge, next to their own touch controls on the inner side, turned to read upright from the seat, and SHALL NOT overlap any touch controls at any screen size or touch control size. Keyboard and gamepad players' blocks SHALL be upright along the top edge in player order, except when a top or bottom touch seat is taken: then they SHALL be upright in the screen corners (player 1 top-left, 2 top-right, 3 bottom-left, 4 bottom-right). On a window narrower than 600 dp, the blocks along the top edge SHALL show lives above points, two blocks per row in player order. On a two-seat screen whose touch seats are at the top and bottom, the keyboard and gamepad players' blocks SHALL be upright beside the middle of the left and right edges instead of the corners (player 1 left above, 2 right above, 3 left below, 4 right below), and the touch players' controls SHALL keep their whole edges. No block SHALL overlap another block or any touch control.
+During a multiplayer game each player's lives and points SHALL be shown in a separate status block tinted with the colour of that player's cabin. A touch player's block SHALL be at the middle of their edge, next to their own touch controls on the inner side, turned to read upright from the seat, and SHALL NOT overlap any touch controls at any screen size or touch control size. Keyboard and gamepad players' blocks SHALL be upright along the top edge in player order, except when a top or bottom touch seat is taken: then they SHALL be upright in the screen corners (player 1 top-left, 2 top-right, 3 bottom-left, 4 bottom-right). On a window narrower than 600 dp, the blocks along the top edge SHALL show lives above points, two blocks per row in player order. On a two-seat screen whose touch seats are at the top and bottom, the keyboard and gamepad players' blocks SHALL be upright beside the middle of the left and right edges instead of the corners (player 1 left above, 2 right above, 3 left below, 4 right below), and the touch players' controls SHALL keep their whole edges; when the game starts on a wide window with only a bottom touch player, the blocks SHALL be along the top edge instead and the bottom player's controls in the corners of the bottom edge. No block SHALL overlap another block or any touch control.
 
 #### Scenario: Mixed status blocks
 - **WHEN** a game runs with two touch players on the left and right, a keyboard player and a gamepad player
@@ -117,6 +176,10 @@ During a multiplayer game each player's lives and points SHALL be shown in a sep
 #### Scenario: Gamepad players on a phone held upright
 - **WHEN** a game with two gamepad players and two keyboard sets runs on a 360 x 800 dp phone, with points up to 12345
 - **THEN** the four blocks are at the top, two per row, each with lives above points, all inside the window and none overlapping another
+
+#### Scenario: Phone held horizontally with a gamepad player
+- **WHEN** a game starts on a phone held in landscape with a gamepad player, a touch player at the bottom and a keyboard player
+- **THEN** the gamepad and keyboard players' blocks are along the top edge, and the touch player's joystick and FIRE are in the bottom corners with Pause between them
 
 #### Scenario: Touch player at the top of a phone with a gamepad player
 - **WHEN** a game runs on a phone with a touch player at the top as player 1 and a gamepad player as player 2, held upright or turned to landscape after the seat was taken

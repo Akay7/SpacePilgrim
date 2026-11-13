@@ -1,4 +1,4 @@
-__version__ = "0.6.0"
+__version__ = "0.6.2"
 
 import colorsys
 import itertools
@@ -102,7 +102,7 @@ from kivy.graphics import (
     Color, Ellipse, Line, PopMatrix, PushMatrix, Rectangle, RoundedRectangle,
     Rotate, Scale, Translate, Triangle,
 )
-from kivy.metrics import Metrics, dp, cm
+from kivy.metrics import Metrics, dp, cm, sp
 from kivy.vector import Vector
 from kivy.clock import Clock
 from kivy.logger import Logger
@@ -143,8 +143,14 @@ DEFAULT_KEY_BINDINGS_P2 = {
 DEFAULT_PLAYER_KEYS = [DEFAULT_KEY_BINDINGS, DEFAULT_KEY_BINDINGS_P2]
 KEY_SETS = len(DEFAULT_PLAYER_KEYS)
 MAX_PLAYERS = 4   # join slots of a multiplayer game
-TOUCH_SIDES = ('left', 'right')   # touch seats on a phone, one per side
-TALL_SIDES = ('top', 'bottom')    # the same, on a phone held upright
+TOUCH_SIDES = ('left', 'right')   # the side seats, one per short edge
+# touch seats on a phone: a player at each short edge, facing each other,
+# or one at a long edge, holding it with the joystick and FIRE under the
+# thumbs; that long seat comes last. Held horizontally its bottom edge;
+# held upright its right edge, where a player's bottom is who turns the
+# phone (top to the left) while the screen stays upright
+WIDE_SEATS = TOUCH_SIDES + ('bottom',)
+TALL_SEATS = ('top', 'bottom', 'right')
 # on a screen big enough (see four_seat_screen) a seat at every edge
 FOUR_SEATS = TOUCH_SIDES + ('top', 'bottom')
 FOUR_SEAT_MIN_CM = (15, 10)   # landscape width x height for four seats
@@ -1195,23 +1201,42 @@ def four_seat_screen(size=None, dpi=None):
 
 
 def touch_seats(size=None):
-    """The seats of touch players on this screen: one per edge on a big
-    one; else the two short edges of the window (`size`, default the
-    window's), so each player holds a short end: left and right when it
-    is wide, top and bottom when it is tall."""
+    """The seats of touch players on this screen, on every join screen:
+    one per edge on a big one; else the two short edges of the window
+    (`size`, default the window's), so each player holds a short end, and
+    one long edge for a single player (WIDE_SEATS, TALL_SEATS)."""
     if four_seat_screen():
         return FOUR_SEATS
     width, height = size or Window.size
-    return TOUCH_SIDES if width >= height else TALL_SIDES
+    return WIDE_SEATS if width >= height else TALL_SEATS
 
 
-def client_seats(size=None):
-    """The touch seats of a device joining another device's game (a phone
-    joining a TV): as touch_seats, and on a phone held horizontally also
-    the bottom edge, for one player holding it with the joystick and FIRE
-    under the thumbs."""
-    seats = touch_seats(size)
-    return seats + ('bottom',) if seats == TOUCH_SIDES else seats
+def show_widget(parent, widget):
+    """Put `widget` on `parent`, unless it is on screen already."""
+    if widget.parent is None:
+        parent.add_widget(widget)
+
+
+def hide_widget(widget):
+    """Take `widget` off the screen. Kivy has no `visible`: a widget left
+    on screen at opacity 0 still gets taps and a disabled one swallows
+    them, so a hidden widget is not left on screen. Keep a reference to
+    it to show it again (a kv id is only a weak one)."""
+    if widget.parent is not None:
+        widget.parent.remove_widget(widget)
+
+
+def seat_closed(side, taken, seats):
+    """Whether the touch seat `side` is closed by the `taken` ones: on a
+    phone the long-edge seat (the last of `seats`) and the two short-edge
+    seats are not taken together; three sets of controls do not fit."""
+    if set(seats) not in (set(WIDE_SEATS), set(TALL_SEATS)):
+        return False
+    seats = WIDE_SEATS if set(seats) == set(WIDE_SEATS) else TALL_SEATS
+    long, short = seats[-1], seats[:-1]
+    if side == long:
+        return bool(set(taken) & set(short))
+    return side in short and long in taken
 
 
 class SoundPool:
@@ -1423,6 +1448,26 @@ class SpaceshipStatus(Widget):
 
     PAUSE_GAP = dp(8)   # room kept between Pause and the controls
 
+    def on_kv_post(self, base_widget):
+        # a kv id is only a weak reference: keep the Pause button alive
+        # while it is off screen (see _show_pause)
+        pause = self.ids.get('pause')
+        self.pause_button = pause.__self__ if pause is not None else None
+        self._show_pause()
+
+    def on_show_menu(self, *args):
+        self._show_pause()
+
+    def _show_pause(self):
+        """The Pause button is on screen only while shown."""
+        pause = getattr(self, 'pause_button', None)
+        if pause is None:
+            return
+        if self.show_menu:
+            show_widget(self, pause)
+        else:
+            hide_widget(pause)
+
     def follow(self, touch_buttons):
         """Keep the block next to the touch controls of its player, whatever
         their size: the joystick is the deepest control of the seat. The
@@ -1542,7 +1587,10 @@ class SpaceshipStatus(Widget):
                 # narrow: two lines, two per row in slot order
                 return (w * (column % 2 + 0.5) / 2,
                         h - dp(32) - (column // 2) * dp(52))
-            return w * (column + 0.5) / 4, h - dp(ROW_DP)
+            # the end blocks kept inside the window
+            half = text_size[0] / 2 + dp(4)
+            x = min(max(w * (column + 0.5) / 4, half), w - half)
+            return x, h - dp(ROW_DP)
         if side == 'flank':
             # beside the middle of the left and right edges, in slot order:
             # left above, right above, left below, right below
@@ -2780,14 +2828,12 @@ class JoinScreen(BoxLayout):
     STRIP_WIDTH = dp(64)
 
     def __init__(self, colors, bindings, touch=True, seats=TOUCH_SIDES,
-                 lobby=None, net=None, name='', default_name='',
-                 seats_for=touch_seats, **kwargs):
+                 lobby=None, net=None, name='', default_name='', **kwargs):
         super().__init__(spacing=dp(10), **kwargs)
         self.ship_colors = colors
         self.bindings = bindings
         self.touch = touch      # offer joining by touch (side strips)
-        self.seats = seats      # touch seats: two short edges, or every edge
-        self.seats_for = seats_for  # the seats for the window's shape
+        self.seats = seats      # touch seats: see touch_seats
         self.lobby = lobby if lobby is not None else Lobby(colors)
         # network game: the host's or client's session glue. A client only
         # shows the host's slots; its devices ask the host to change them.
@@ -2810,6 +2856,10 @@ class JoinScreen(BoxLayout):
         for label in (self.info, self.message):
             label.bind(width=lambda l, w: setattr(l, 'text_size', (w, None)))
             top.add_widget(label)
+        # without an info line (no network game) the message gets it all
+        self.info.size_hint_x = 0
+        self.info.bind(text=lambda l, text: setattr(
+            l, 'size_hint_x', 1 if text else 0))
         middle.add_widget(top)
         middle.add_widget(self.grid)
         # below them: Back, and (unless this is another machine's game) the
@@ -2865,25 +2915,48 @@ class JoinScreen(BoxLayout):
     WIDE_BAR = dp(560)           # narrowest middle for a one-line bottom row
 
     def _strip(self, side):
-        across = 'x' if side in ('left', 'right') else 'y'
-        return SideJoinButton(
-            side=side, on_press=lambda b: self.join_touch(b.side),
-            **{'size_hint_' + across: None,
-               ('width' if across == 'x' else 'height'): self.STRIP_WIDTH})
+        """The strip of a seat, made once and kept for when the window
+        turns back."""
+        made = self.__dict__.setdefault('_strips_made', {})
+        if side not in made:
+            across = 'x' if side in ('left', 'right') else 'y'
+            made[side] = SideJoinButton(
+                side=side, on_press=lambda b: self.join_touch(b.side),
+                **{'size_hint_' + across: None,
+                   ('width' if across == 'x' else 'height'):
+                       self.STRIP_WIDTH})
+        strip = made[side]
+        if strip.parent is not None:
+            strip.parent.remove_widget(strip)
+        return strip
+
+    def _open_seats(self):
+        """The seats whose strips are laid out: not those closed by a
+        taken seat (seat_closed), which give their room to the panels."""
+        if not self.touch:
+            return ()           # no touchscreen (a TV): no strips at all
+        taken = self._taken_seats()
+        return tuple(side for side in self.seats
+                     if not seat_closed(side, taken, self.seats))
 
     def _place_strips(self):
-        """A strip at every seat: left and right beside the panels, top
-        and bottom above and below them."""
+        """A strip at every open seat: left and right beside the panels,
+        top and bottom above and below them."""
         self.clear_widgets()
-        column = self.middle.parent
-        if column is not None:
-            column.remove_widget(self.middle)
+        # one column and its fillers for the screen's life (made once)
+        made = self.__dict__.setdefault('_column', None)
+        if made is None:
+            made = self._column = (
+                BoxLayout(orientation='vertical', spacing=dp(10)),
+                Widget(), Widget())
+        column = made[0]
+        column.clear_widgets()
         self.side_buttons = {side: self._strip(side) for side in self.seats}
-        strips = self.side_buttons
-        column = BoxLayout(orientation='vertical', spacing=dp(10))
+        self._placed = self._open_seats()
+        strips = {side: self.side_buttons[side] for side in self._placed}
         # with a top or bottom strip, room above and below the panels
         tall = 'top' in strips or 'bottom' in strips
-        fillers = (Widget(), Widget()) if tall else (None, None)
+        fillers = made[1:] if tall else (None, None)
         for widget in (strips.get('top'), fillers[0], self.middle,
                        fillers[1], strips.get('bottom')):
             if widget is not None:
@@ -2901,48 +2974,118 @@ class JoinScreen(BoxLayout):
             self._on_window()
 
     def _on_window(self, *args):
-        """The window changed: empty seats move to the short edges of a
-        two-seat screen (a seated touch player keeps theirs), then
-        everything fits the new size."""
-        if set(self.seats) != set(FOUR_SEATS):
-            seated = any(self.slot_of(('touch', side)) is not None
-                         for side in self.seats)
-            seats = self.seats_for()
-            if not seated and seats != self.seats:
-                self.seats = seats
-                self._place_strips()
-                self.refresh()
-                return
+        """The window changed: while nobody sits by touch the seats become
+        those of the new size (touch_seats: a window made small loses the
+        top and bottom seats of a big screen); a seated touch player keeps
+        theirs. Then everything fits the new size."""
+        seated = any(self.slot_of(('touch', side)) is not None
+                     for side in self.seats)
+        seats = touch_seats()
+        if not seated and seats != self.seats:
+            self.seats = seats
+            self._place_strips()
+            self.refresh()
+            return
         self._fit()
 
     def _fit(self):
         """The whole window width (and with a top or bottom seat its
         height), so the touch strips are at the screen edges; the panels
         four across or two by two, the bottom row in one line or two."""
-        strips = self.side_buttons
+        strips = set(getattr(self, '_placed', self.seats))
         tall = 'top' in strips or 'bottom' in strips
         panels_height = min(dp(450), Window.height - dp(10))
-        self.size = (Window.width - dp(10),
-                     Window.height - dp(10) if tall else panels_height)
         sides = sum(side in strips for side in ('left', 'right'))
-        free = self.width - sides * (self.STRIP_WIDTH + dp(10))
+        free = (Window.width - dp(10)
+                - sides * (self.STRIP_WIDTH + dp(10)))
         width = min(dp(190) * MAX_PLAYERS + dp(30), free)
+        # two rows of two get the window's height, like with a top strip
+        rows = width < self.PANEL_MIN * MAX_PLAYERS + dp(30)
+        self.size = (Window.width - dp(10),
+                     Window.height - dp(10) if tall
+                     else min(dp(700), Window.height - dp(10)) if rows
+                     else panels_height)
         self.middle.width = width
-        four = width >= self.PANEL_MIN * MAX_PLAYERS + dp(30)
-        self.grid.cols = MAX_PLAYERS if four else 2
         wide = width >= self.WIDE_BAR or self.mirror is not None
         self.bottom.cols = (2 if self.mirror is not None
                             else 4 if wide else 2)
         self.bottom.height = dp(48) if wide else dp(106)
+        ends = sum(side in strips for side in ('top', 'bottom'))
+        room = self.height - ends * (self.STRIP_WIDTH + dp(10))
+
+        def middle_height(four):
+            return (min(panels_height if four else dp(700), room) if tall
+                    else self.height)
+
+        def panel_height(four):
+            # the middle less the line above the panels and the bottom row
+            grid = (middle_height(four) - dp(24) - self.bottom.height
+                    - 2 * dp(10))
+            return grid if four else (grid - dp(10)) / 2
+        # two rows of two on a narrow window, unless they get too short
+        # and four narrower panels still fit across
+        four = (width >= self.PANEL_MIN * MAX_PLAYERS + dp(30)
+                or (panel_height(False) < self.PANEL_TALL
+                    and width >= self.PANEL_NARROW * MAX_PLAYERS + dp(30)))
+        self.grid.cols = MAX_PLAYERS if four else 2
         if tall:
-            ends = sum(side in strips for side in ('top', 'bottom'))
-            room = self.height - ends * (self.STRIP_WIDTH + dp(10))
             self.middle.size_hint_y = None
-            self.middle.height = min(
-                panels_height if four else dp(700), room)
+            self.middle.height = middle_height(four)
         else:
             self.middle.size_hint_y = 1
+        self._size_panels(panel_height(four))
         self._center()
+
+    PANEL_FULL = dp(220)    # a slot panel's height with everything full size
+    PANEL_NARROW = dp(110)  # the narrowest panel of four across a short window
+    PANEL_TALL = dp(190)    # the shortest panel of two rows of two
+
+    def _size_panels(self, height):
+        """Rows, text and gaps of the slot panels made smaller together,
+        down to 70%, to fit panels `height` high (a phone held
+        horizontally); longer texts get smaller still until they fit."""
+        k = min(1.0, max(0.7, height / self.PANEL_FULL))
+        self._panel_k = k
+        for w in self.panels:
+            w['panel'].padding = dp(8) * k
+            w['panel'].spacing = dp(6) * k
+            w['title'].height = dp(28) * k
+            w['device'].height = dp(24) * k
+            w['colour_row'].height = w['action_row'].height = dp(44) * k
+            # the hint line goes first when even that is too tall
+            room = height >= self.PANEL_FULL * k
+            self._hint_room = room
+            w['hint'].height = dp(34) * k
+            if room and w['action_row'].parent is w['panel']:
+                show_widget(w['panel'], w['hint'])
+            else:
+                hide_widget(w['hint'])
+            for name in ('title', 'name', 'prev', 'next', 'ready', 'leave'):
+                w[name].font_size = sp(15) * k
+            w['device'].font_size = self._device_font()
+            w['hint'].fit_font = dp(12) * k
+            w['empty'].fit_font = sp(15) * k
+            for name in ('hint', 'empty'):
+                w[name].fit()
+
+    def _device_font(self):
+        return (dp(13) if self.net is not None else sp(15)) * getattr(
+            self, '_panel_k', 1.0)
+
+    @staticmethod
+    def _shrink_to_fit(label, *args):
+        """The label's font (from its `fit_font`) made smaller until its
+        wrapped text fits its height."""
+        if not label.text or label.width <= 1 or label.parent is None:
+            return
+        label.text_size = (label.width, None)
+        size = getattr(label, 'fit_font', sp(15))
+        while True:
+            label.font_size = size
+            label.texture_update()
+            if label.texture_size[1] <= label.height or size <= dp(9):
+                return
+            size -= dp(1)
 
     def _center(self, *args):
         self.pos = ((Window.width - self.width) / 2,
@@ -2975,7 +3118,7 @@ class JoinScreen(BoxLayout):
             'title': Label(text='Player {}'.format(slot + 1), bold=True,
                            size_hint_y=None, height=dp(28)),
             'device': Label(size_hint_y=None, height=dp(24), shorten=True,
-                            shorten_from='right'),
+                            shorten_from='right', halign='center'),
             'preview': ShipPreview(),
             'name': name, 'prev': prev, 'next': nxt,
             'colour_row': row(prev, name, nxt),
@@ -2985,8 +3128,12 @@ class JoinScreen(BoxLayout):
                           halign='center'),
             'empty': Label(halign='center', valign='middle'),
         }
-        empty = widgets['empty']
-        empty.bind(size=lambda label, size: setattr(label, 'text_size', size))
+        for name in ('hint', 'empty'):
+            # once a frame, after the layout settled
+            label = widgets[name]
+            label.fit = Clock.create_trigger(
+                partial(self._shrink_to_fit, label))
+            label.bind(size=label.fit, text=label.fit)
         widgets['device'].bind(
             width=lambda label, width: setattr(label, 'text_size', (width, None)))
         self.panels.append(widgets)
@@ -3030,7 +3177,8 @@ class JoinScreen(BoxLayout):
         """A touch player sits at the `side` whose strip they tapped and
         takes the first free slot; one per side, and only at the seats of
         this screen."""
-        if side not in self.seats:
+        if side not in self.seats or seat_closed(side, self._taken_seats(),
+                                                  self.seats):
             return None
         if self.mirror:
             self.mirror.touch(side)
@@ -3189,16 +3337,13 @@ class JoinScreen(BoxLayout):
     def device_label(self, device):
         remote = is_remote(device)
         kind, key = local_device(device)
+        # short, to fit a narrow panel: the hint below lists the keys
         if kind == 'keys':
-            # a network game names the machine instead of the keys (another
-            # machine's keys may be bound differently; the hint lists ours)
-            text = ('Keys set {}'.format(key + 1) if self.net is not None else
-                    'Keys ' + ' '.join(self.bindings.label(a, key)
-                                       for a in ('up', 'left', 'right', 'fire')))
+            text = 'Keyboard {}'.format(key + 1)
         elif kind == 'pad':
             text = 'Gamepad {}'.format(key + 1)
         else:
-            text = 'Touch · {} side'.format(key)
+            text = 'Touch · {}'.format(key)
         if self.net is not None:
             text += ' · ' + (self.lobby.names.get(device[1], '?') if remote
                              else 'this device')
@@ -3214,13 +3359,20 @@ class JoinScreen(BoxLayout):
                 label('left'), label('right'), label('fire'), label('up'))
         if kind == 'pad':
             return 'Stick colour · A ready\nBack leave'
-        return 'Tap the buttons above'
+        return 'Tap the buttons'
+
+    def _taken_seats(self):
+        return {side for side in self.seats
+                if self.slot_of(('touch', side)) is not None}
 
     def refresh(self):
+        taken = self._taken_seats()
+        if self._open_seats() != getattr(self, '_placed', None):
+            self._place_strips()
         for side, strip in self.side_buttons.items():
             slot = self.slot_of(('touch', side))
-            strip.opacity = 1 if self.touch else 0
-            strip.disabled = slot is not None or not self.touch
+            shown = self.touch and not seat_closed(side, taken, self.seats)
+            strip.disabled = slot is not None   # names the seated player
             strip.text = ('Tap to join by touch' if slot is None
                           else 'Player {} · touch'.format(slot + 1))
         for slot, w in enumerate(self.panels):
@@ -3231,10 +3383,8 @@ class JoinScreen(BoxLayout):
                 w['title'].color = (1, 1, 1, 0.6)
                 w['border_color'].rgba = (1, 1, 1, 0.3)
                 w['empty'].text = (
-                    'Press FIRE on a keyboard set or gamepad' + (
-                        '\n\nor tap {} of the screen to play by touch '
-                        'there'.format('an edge' if 'top' in self.seats
-                                       else 'a side')
+                    'Press FIRE on keys or a gamepad' + (
+                        '\n\nor tap an edge to play by touch'
                         if self.touch else ''))
                 panel.add_widget(w['empty'])
                 continue
@@ -3244,8 +3394,7 @@ class JoinScreen(BoxLayout):
             w['border_color'].rgba = (*rgb, 1 if self.flashing[slot] else 0.6)
             w['border'].width = dp(4) if self.flashing[slot] else dp(1.5)
             w['device'].text = self.device_label(device)
-            if self.net is not None:
-                w['device'].font_size = '13dp'
+            w['device'].font_size = self._device_font()
             w['device'].color = (*rgb, 1)
             w['preview'].texture = cabin_textures(color)[0]
             w['name'].text = color.capitalize()
@@ -3254,9 +3403,10 @@ class JoinScreen(BoxLayout):
             for name in ('prev', 'next', 'ready', 'leave'):
                 w[name].disabled = is_remote(device)
             w['hint'].text = self.device_hint(device)
-            for name in ('device', 'preview', 'colour_row', 'action_row',
-                         'hint'):
+            for name in ('device', 'preview', 'colour_row', 'action_row'):
                 panel.add_widget(w[name])
+            if getattr(self, '_hint_room', True):
+                panel.add_widget(w['hint'])
         self.name_field.disabled = self.net is not None
         self.network_button.text = 'Local network: {}'.format(
             'On' if self.net is not None else 'Off')
@@ -3680,14 +3830,13 @@ class JoinPrompt(Widget):
     the free touch seats of this device."""
     FULL_TIME = 2.0
 
-    def __init__(self, seats, on_touch_join, seats_for=None, **kwargs):
+    def __init__(self, seats, on_touch_join, **kwargs):
         super().__init__(**kwargs)
         self.label = Label(font_size='18dp', halign='center',
                            size_hint=(None, None))
         self.label.bind(texture_size=self._layout)
         self.add_widget(self.label)
         self.on_touch_join = on_touch_join
-        self.seats_for = seats_for   # the seats follow the window's shape
         self.strips = {}
         self._made = {}
         self._make_strips(seats)
@@ -3699,12 +3848,11 @@ class JoinPrompt(Widget):
         self._layout()
 
     def _make_strips(self, seats):
-        """The strips of `seats`; a strip made once is kept (hidden while
-        its seat is not offered) for when the window turns back."""
+        """The strips of `seats`; a strip made once is kept, off screen
+        while its seat is not offered, for when the window turns back."""
         for side, strip in self._made.items():
             if side not in seats:
-                strip.opacity = 0
-                strip.disabled = True
+                hide_widget(strip)
         self.strips = {}
         for side in seats:
             strip = self._made.get(side)
@@ -3713,15 +3861,13 @@ class JoinPrompt(Widget):
                                        size_hint=(None, None))
                 strip.bind(on_press=lambda b: self.on_touch_join(b.side))
                 self._made[side] = strip
-                self.add_widget(strip)
             self.strips[side] = strip
 
     def _layout(self, *args):
-        if self.seats_for is not None:
-            seats = tuple(self.seats_for())
-            if seats != tuple(self.strips):
-                self._make_strips(seats)
-                self.show(*self._shown)
+        seats = tuple(touch_seats())      # they follow the window's shape
+        if seats != tuple(self.strips):
+            self._make_strips(seats)
+            self.show(*self._shown)
         width, height = Window.size
         across = dp(64)
         for side, strip in self.strips.items():
@@ -3747,14 +3893,20 @@ class JoinPrompt(Widget):
         else:
             text = 'The game is full'
         self.label.text = text
-        self.label.opacity = 1 if visible else 0
+        if visible:
+            show_widget(self, self.label)
+        else:
+            hide_widget(self.label)
         for side, strip in self.strips.items():
-            on = visible and touch and free > 0 and side not in taken
-            strip.opacity = 1 if on else 0
-            strip.disabled = not on
+            if (visible and touch and free > 0 and side not in taken
+                    and not seat_closed(side, taken, tuple(self.strips))):
+                show_widget(self, strip)
+            else:
+                hide_widget(strip)
 
     def full(self):
         self._full_until = Clock.get_time() + self.FULL_TIME
+
 
     def detach(self):
         Window.unbind(size=self._layout)
@@ -4307,7 +4459,11 @@ class SpacePilgrimGame(Widget):
         self.controls = []   # one ControlsManager per slot, None if empty/out
         self.slots = None    # multiplayer: slot -> device; None: one player
         self.joined_at = {}  # slot -> elapsed time when the player joined
-        self._layout = (False, False)   # see _seat_layout
+        self._layout = (False, False, False)   # see _seat_layout
+        # the window changed size: the blocks go where a game started at
+        # the new size puts them (once the change is over)
+        self._follow_window = Clock.create_trigger(self._place_blocks)
+        Window.bind(size=self._follow_window)
         # network game: NetHost or NetClient while hosting or joined
         self.net = None
         self.in_net_game = False
@@ -4393,26 +4549,55 @@ class SpacePilgrimGame(Widget):
 
     @staticmethod
     def _seat_layout(devices):
-        """(edges, flank): a touch player of this screen at the top or
-        bottom edge means a seat at every edge, and the keyboard, gamepad
-        and remote players' lives and points in the corners. A two-seat
-        screen (a phone) has touch seats at the top and bottom only when it
-        was held upright: their controls need those whole edges, so the
-        other players' lives and points go beside the middle of the free
-        left and right edges instead (flank), whichever way the phone is
-        held now."""
+        """(edges, flank, row): a touch player of this screen at the top
+        or bottom edge means a seat at every edge, and the keyboard, gamepad
+        and remote players' lives and points in the corners. On a two-seat
+        screen (a phone) with touch players only at the top and bottom,
+        their controls need those whole edges: held upright, the other
+        players' lives and points go beside the middle of the free left and
+        right edges (flank), whichever way the phone is held later; held
+        horizontally with nobody at the top, along the top row (row), so
+        the bottom player's controls keep the bottom corners."""
         seats = [touch_seat(d) for d in devices]
         edges = any(seat in ('top', 'bottom') for seat in seats)
         sides = any(seat in ('left', 'right') for seat in seats)
         flank = edges and not sides and not four_seat_screen()
-        return edges, flank
+        row = flank and 'top' not in seats and Window.width >= Window.height
+        return edges, flank and not row, row
+
+    @staticmethod
+    def _blocks_side(edges, flank, row):
+        """Where the keyboard, gamepad and remote players' blocks go."""
+        return ('flank' if flank else 'row' if row
+                else 'corner' if edges else 'row')
+
+    def _place_blocks(self, *args):
+        """After the window changed size during a multiplayer game, the
+        keyboard, gamepad and remote players' blocks go where a game
+        started at the new size puts them (a phone held upright, then
+        turned; a window made small), and the touch controls follow.
+        Touch players keep their seats."""
+        if self.slots is None or not self.statuses:
+            return
+        layout = self._seat_layout(self.slots)
+        edges = layout[0] or any(s.side in ('top', 'bottom')
+                                 for s in self.statuses)
+        self._layout = layout
+        side = self._blocks_side(edges, *layout[1:])
+        moved = [s for s in self.statuses
+                 if s.side not in SEAT_ANGLES and s.side != side]
+        if not moved:
+            return
+        for status in moved:
+            status.side = side
+        self._share_seats()
 
     def add_player(self, slot, device, color, ship=None, place=False):
         """The ship, lives and points block and controls of one player.
         A network client brings the mirror `ship` it draws and gets controls
         only for its own players; `place` keeps a ship that joins a running
         game away from the asteroids."""
-        edges, flank = self._layout
+        edges, flank, row = self._layout
         seat = touch_seat(device)
         if seat in ('top', 'bottom') and not edges:
             edges = True        # joined during the game at a new edge
@@ -4425,8 +4610,7 @@ class SpacePilgrimGame(Widget):
         if self.slots is None:
             side = ''
         else:
-            side = seat or ('flank' if flank else 'corner' if edges
-                            else 'row')
+            side = seat or self._blocks_side(edges, flank, row)
         status = SpaceshipStatus(spaceship=ship, side=side, column=slot,
                                  color=(*cabin_rgb(color), 1))
         # a client's field keeps clear of the block wherever it goes
@@ -5246,8 +5430,7 @@ class SpacePilgrimGame(Widget):
         net = self.net
         self.select = JoinScreen(
             net.colors, self.bindings, touch=self.has_touch,
-            seats=client_seats(), seats_for=client_seats, lobby=net.lobby,
-            net=net)
+            seats=touch_seats(), lobby=net.lobby, net=net)
         self.select.flashing = list(net.flash)
         self.add_widget(self.select)
         self._client_join_info()
@@ -5384,10 +5567,8 @@ class SpacePilgrimGame(Widget):
         if not self.in_net_game or self.net is None:
             return
         if prompt is None:
-            seats = client_seats if self._joined_client else touch_seats
             self.prompt = prompt = JoinPrompt(
-                seats(), lambda side: self.net_join(('touch', side)),
-                seats_for=seats)
+                touch_seats(), lambda side: self.net_join(('touch', side)))
             self.add_widget(prompt)
         lobby = self.net.lobby
         # only a machine without a player in this game may still join

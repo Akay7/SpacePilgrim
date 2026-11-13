@@ -79,7 +79,7 @@
   - Local device actions, touch strips and panel buttons send `act` / `touch` instead of changing state.
   - `refresh()` draws the latest `lobby`. The client's own slots say " · this device", and touch strips use the client's own `touch_seats()`.
   - Escape sends `bye` and shows the menu. Connecting from `NetworkScreen` (a found game or an address) in the `lobby` phase opens this screen.
-  - On both the host's and the client's join screen, the panel buttons of a slot held by another machine are disabled, and keyboard sets show as "Keys set N · <machine>".
+  - On both the host's and the client's join screen, the panel buttons of a slot held by another machine are disabled, and keyboard sets show as "Keyboard N · <machine>".
   - Also test that each screen's own panel buttons are enabled and the other machine's are disabled.
   - Test with an in-process host: the client's lobby matches the host's within one poll cycle, colour and ready changes on the client show on both, a flash on the host shows on the client, and Escape on the client frees its slot on the host.
   - Verify with `pytest -k client_join`.

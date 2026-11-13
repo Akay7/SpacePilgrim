@@ -7,6 +7,7 @@ The test window has density 1, so dp are pixels."""
 from contextlib import contextmanager
 
 import pytest
+from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.lang import Builder
 
@@ -77,26 +78,52 @@ def test_phone_seats_upright_are_top_and_bottom(game):
     with window(360, 800):
         game.show_ship_select(2)
         select = game.select
-        assert select.seats == ('top', 'bottom')
-        assert set(select.side_buttons) == {'top', 'bottom'}
+        assert select.seats == main.TALL_SEATS
+        assert set(select.side_buttons) == {'top', 'bottom', 'right'}
         select.side_buttons['top'].dispatch('on_press')
         assert select.slots[0] == ('touch', 'top')
-        assert select.panels[0]['device'].text == 'Touch · top side'
+        assert select.panels[0]['device'].text == 'Touch · top'
 
 
 def test_empty_seats_follow_a_turn(game):
     with window(800, 360):
         game.show_ship_select(2)
         select = game.select
-        assert select.seats == ('left', 'right')
+        assert select.seats == main.WIDE_SEATS
         turn(360, 800)
-        assert select.seats == ('top', 'bottom')
+        assert select.seats == main.TALL_SEATS
         lay_out(select)
         top, bottom = select.side_buttons['top'], select.side_buttons['bottom']
         assert box(top)[3] > Window.height - 10 and box(bottom)[1] < 10
         assert top.width > top.height
         turn(800, 360)
-        assert select.seats == ('left', 'right')
+        assert select.seats == main.WIDE_SEATS
+
+
+@pytest.mark.parametrize('size, first, closed', [
+    ((800, 360), 'left', {'bottom'}),
+    ((800, 360), 'right', {'bottom'}),
+    ((800, 360), 'bottom', {'left', 'right'}),
+    ((360, 800), 'top', {'right'}),
+    ((360, 800), 'right', {'top', 'bottom'}),
+])
+def test_phone_bottom_seat_or_side_seats(game, size, first, closed):
+    """On a phone the long-edge seat (the bottom held horizontally, the
+    right held upright) is for one player holding it with both thumbs: it
+    and the short-edge seats exclude each other."""
+    with window(*size):
+        game.show_ship_select(2)
+        select = game.select
+        select.join_touch(first)
+        for side in closed:
+            strip = select.side_buttons[side]
+            assert strip.parent is None
+            assert select.join_touch(side) is None
+        open_ = set(select.seats) - closed - {first}
+        for side in open_:
+            assert select.side_buttons[side].parent is not None
+        select.leave(select.slot_of(('touch', first)))
+        assert all(s.parent is not None for s in select.side_buttons.values())
 
 
 def test_seated_player_keeps_the_edge_on_a_turn(game):
@@ -105,7 +132,7 @@ def test_seated_player_keeps_the_edge_on_a_turn(game):
         select = game.select
         select.join_touch('left')
         turn(360, 800)
-        assert select.seats == ('left', 'right')
+        assert select.seats == main.WIDE_SEATS
         assert select.slots[0] == ('touch', 'left')
         lay_out(select)
         assert box(select.side_buttons['left'])[0] < 10
@@ -182,13 +209,17 @@ def test_join_screen_follows_a_turned_tablet(game, monkeypatch):
 
 @pytest.mark.parametrize('size', [(800, 360), (1280, 800)])
 def test_join_screen_opened_in_landscape_fills_its_height(game, size):
+    """The panels take the height the bottom strip leaves."""
     with window(*size):
         game.show_ship_select(2)
         select = game.select
         lay_out(select)
-        assert select.middle.height == pytest.approx(select.height)
+        room = select.height - (select.STRIP_WIDTH + main.dp(10))
+        assert select.middle.height == pytest.approx(
+            min(main.dp(450), room))
+        assert box(select.side_buttons['bottom'])[1] < 10
         for w in select.panels:
-            assert w['panel'].height > select.height - 100 - 48
+            assert w['panel'].height > select.middle.height - 100 - 48
 
 
 def test_join_screen_on_an_upright_phone_is_readable(game):
@@ -197,8 +228,112 @@ def test_join_screen_on_an_upright_phone_is_readable(game):
         select = game.select
         lay_out(select)
         assert select.grid.cols == 2 and select.bottom.cols == 2
+        for w in select.panels:      # beside the long edge's strip
+            assert w['panel'].width >= 130 and inside(w['panel'])
+
+
+def _big_when_wide(monkeypatch):
+    """A desktop window being resized: a big screen while 1000 px wide."""
+    monkeypatch.setattr(main, 'four_seat_screen',
+                        lambda size=None, dpi=None:
+                        (size or Window.size)[0] >= 1000)
+
+
+def test_join_screen_follows_a_window_made_small(game, monkeypatch):
+    _big_when_wide(monkeypatch)
+    with window(1280, 800):
+        game.show_ship_select(2)
+        select = game.select
+        assert select.seats == main.FOUR_SEATS
+        turn(900, 415)
+        assert select.seats == main.WIDE_SEATS
+        assert set(select.side_buttons) == set(main.WIDE_SEATS)
+        turn(1280, 800)
+        assert select.seats == main.FOUR_SEATS
+
+
+def test_join_screen_keeps_seats_while_someone_sits(game, monkeypatch):
+    _big_when_wide(monkeypatch)
+    with window(1280, 800):
+        game.show_ship_select(2)
+        select = game.select
+        select.join_touch('top')
+        turn(900, 415)
+        assert select.seats == main.FOUR_SEATS
+        assert select.slots[0] == ('touch', 'top')
+
+
+@pytest.mark.parametrize('start, end, before, after', [
+    ((360, 800), (800, 360), 'flank', 'row'),     # upright, then turned
+    ((800, 360), (360, 800), 'row', 'flank'),
+])
+def test_blocks_follow_a_turned_phone(game, start, end, before, after):
+    """A lone bottom touch player with a gamepad player: the gamepad
+    player's block moves as if the game had started the new way, and the
+    bottom player's controls follow into or out of the corners."""
+    with window(*start):
+        game.game_start(slots=[('touch', 'bottom'), ('pad', 0)])
+        Clock.tick()
+        pad = game.statuses[1]
+        assert pad.side == before
+        turn(*end)
+        Clock.tick()
+        assert pad.side == after
+        layout = game.controls[0].touch_buttons
+        assert layout.flank == (after == 'flank')
+        if after == 'row':
+            margin = main.dp(main.MARGIN_DP)
+            assert min(layout.stick.x, layout.fire.x) == pytest.approx(margin)
+        _no_overlaps(_text_boxes(game) + _pads(game), *Window.size)
+
+
+def test_blocks_follow_a_window_made_small(game, monkeypatch):
+    """A big screen puts the gamepad player's block in a corner beside a
+    bottom touch player; made small (and wide) it goes to the top row."""
+    _big_when_wide(monkeypatch)
+    with window(1280, 800):
+        game.game_start(slots=[('touch', 'bottom'), ('pad', 0)])
+        Clock.tick()
+        assert game.statuses[1].side == 'corner'
+        turn(900, 415)
+        Clock.tick()
+        assert game.statuses[1].side == 'row'
+        turn(1280, 800)
+        Clock.tick()
+        assert game.statuses[1].side == 'corner'
+
+
+@pytest.mark.parametrize('size', [(800, 360), (640, 360), (732, 412),
+                                  (915, 412), (360, 640), (360, 800),
+                                  (412, 915)])
+@pytest.mark.parametrize('seat', [None, 'long', 'short'])
+def test_join_panels_hold_their_content(game, size, seat):
+    """At common phone sizes, with nobody, a long-edge or a short-edge
+    touch player seated next to a keyboard player, everything of a slot
+    panel is inside it, and the longer texts fit their lines."""
+    with window(*size):
+        game.show_ship_select(2)
+        select = game.select
+        select.join(('keys', 0))
+        if seat:
+            seats = select.seats
+            select.join_touch(seats[-1] if seat == 'long' else seats[0])
+        lay_out(select)
+        Clock.tick()
+        lay_out(select)
         for w in select.panels:
-            assert w['panel'].width >= 150 and inside(w['panel'])
+            panel = box(w['panel'])
+            for child in w['panel'].children:
+                if child.opacity and child.height:
+                    b = box(child)
+                    assert b[1] >= panel[1] - 1 and b[3] <= panel[3] + 1, (
+                        size, seat, w['title'].text, b, panel)
+            for name in ('hint', 'empty'):
+                label = w[name]
+                if label.parent is not None and label.opacity:
+                    select._shrink_to_fit(label)
+                    assert label.texture_size[1] <= label.height + 1
+        assert inside(select)
 
 
 def test_join_screen_stops_following_once_closed(game):
@@ -207,7 +342,7 @@ def test_join_screen_stops_following_once_closed(game):
         select = game.select
         game.close_ship_select()
         turn(360, 800)
-        assert select.seats == ('left', 'right')
+        assert select.seats == main.WIDE_SEATS
 
 
 # ---- a touch game on a phone held upright ------------------------------------------
@@ -461,7 +596,7 @@ def test_pause_button_player_out_of_lives(game):
         ship.lives = 0
         game.lose_spaceship(ship)
         left, right = game.statuses
-        assert not left.show_menu and left.ids.pause.opacity == 0
+        assert not left.show_menu and left.pause_button.parent is None
         assert right.show_menu
 
 
@@ -580,30 +715,52 @@ def test_status_follows_a_turn_to_a_narrow_window(game):
 ])
 @pytest.mark.parametrize('size', [(360, 800), (800, 360)])
 def test_status_beside_the_sides_on_a_phone(game, slots, size):
-    """Touch players at the top or bottom of a phone (seated while it was
-    held upright, then maybe turned) keep their whole edge; the others'
-    lives and points sit beside the middle of the left and right edges,
-    and nothing overlaps."""
+    """Touch players at the top or bottom of a phone keep their whole
+    edge; the others' lives and points sit beside the middle of the left
+    and right edges, or with only a bottom player of a phone held
+    horizontally along the top, and nothing overlaps."""
     with window(*size):
         game.game_start(slots=slots)
         w, h = Window.size
         margin = main.dp(main.MARGIN_DP)
+        seats = {s.side for s in game.statuses if s.side in main.SEAT_ANGLES}
+        others = 'row' if w > h and seats == {'bottom'} else 'flank'
         for status, control in zip(game.statuses, game.controls):
             if status.side in ('top', 'bottom'):
                 layout = control.touch_buttons
                 assert not layout.corners
                 assert not _overlap(box(layout.stick), box(layout.fire))
-                if w < h:          # upright: the controls reach the corners
+                if w < h or others == 'row':   # the controls reach the corners
                     low, high = sorted((layout.stick, layout.fire),
                                        key=lambda b: b.x)
                     assert low.x == pytest.approx(margin)
                     assert high.right == pytest.approx(w - margin)
             else:
-                assert status.side == 'flank'
-                assert '\n' in status.ids.text_label.text
+                assert status.side == others
+                if others == 'flank':
+                    assert '\n' in status.ids.text_label.text
         texts = _text_boxes(game)
         pauses = [_status_boxes(s)[1] for s in game.statuses if s.show_menu]
         _no_overlaps(texts + pauses + _pads(game), w, h)
+
+
+@pytest.mark.parametrize('slots', [
+    [('touch', 'right')],
+    [('pad', 0), ('touch', 'right'), ('keys', 0)],
+])
+def test_long_edge_player_on_an_upright_phone(game, slots):
+    """A player at the right edge of a phone held upright (turned sideways
+    with the screen kept upright): joystick at the bottom, FIRE at the
+    top of that edge, nothing overlapping."""
+    with window(360, 800):
+        game.game_start(slots=slots)
+        layout = next(c for c in game.controls
+                      if c is not None and c.side == 'right').touch_buttons
+        assert layout.stick.y < layout.fire.y
+        assert box(layout.stick)[2] > Window.width - 10 - layout.stick.width
+        texts = _text_boxes(game)
+        pauses = [_status_boxes(s)[1] for s in game.statuses if s.show_menu]
+        _no_overlaps(texts + pauses + _pads(game), *Window.size)
 
 
 def test_status_corners_stay_on_a_four_seat_tablet(game, monkeypatch):

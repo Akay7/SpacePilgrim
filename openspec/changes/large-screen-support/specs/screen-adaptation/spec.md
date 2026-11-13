@@ -52,6 +52,21 @@ Every screen and a running game SHALL fit the current window, down to a 360 dp w
 - **WHEN** a host tablet in landscape turns to portrait during a network game
 - **THEN** each client shows the portrait field, scaled to fit, with black bars beside it
 
+### Requirement: Seats and blocks follow the window's size
+When the window changes size or shape, a join screen with nobody seated by touch SHALL offer the touch seats of the new size, also from a big screen's four seats to a small one's and back; a seated touch player SHALL keep their seat. During a multiplayer game the keyboard, gamepad and other devices' players' lives and points SHALL move to where a game started at the new size puts them, and the touch controls SHALL follow; touch players keep their seats.
+
+#### Scenario: Window made small on the join screen
+- **WHEN** nobody sits by touch on the join screen of a big window with four strips, and the window is made phone-sized and wide
+- **THEN** the strips are at the left, right and bottom edges only
+
+#### Scenario: Phone turned during a game
+- **WHEN** a game started on a phone held upright with a touch player at the bottom and a gamepad player, and the phone turns to landscape
+- **THEN** the gamepad player's block moves from beside the right edge to the top row, and the touch player's joystick and FIRE move into the bottom corners
+
+#### Scenario: Window made small during a game
+- **WHEN** a game started on a big window with a touch player at the bottom and a gamepad player in a corner, and the window is made phone-sized and wide
+- **THEN** the gamepad player's block moves to the top row
+
 ### Requirement: A client's field uses its screen
 A device that shows another device's game (a network client) SHALL show the whole host field at the biggest size its window allows, keeping the field's proportions, and SHALL turn the field a quarter when that shows it bigger.
 
@@ -99,17 +114,6 @@ On a client with at most one touch player, the lives and points of keyboard, gam
 #### Scenario: Touch controls in the top-left corner
 - **WHEN** a client held upright has a touch player at the top, whose FIRE is in the top-left corner, and two players of other devices
 - **THEN** their blocks are in the bottom-left corner, clear of the touch controls
-
-### Requirement: A phone joining a game can be held horizontally
-A two-seat device joining another device's game SHALL offer, when held horizontally, a touch seat at the bottom edge besides the left and right ones, on its join screen and in the "Tap to join" strips while watching, so one player can hold it with the joystick under the left thumb and FIRE under the right. Held upright it SHALL offer the top and bottom seats as before. The offered seats SHALL follow the device as it turns while nobody of it sits. A local game SHALL keep the two short edges.
-
-#### Scenario: Phone joins a TV held horizontally
-- **WHEN** a phone held horizontally opens the join screen of a TV's game
-- **THEN** "Tap to join by touch" strips are at the left, right and bottom edges, and a player who taps the bottom one plays with the joystick in the bottom-left and FIRE in the bottom-right corner
-
-#### Scenario: Watching phone turns
-- **WHEN** a phone watching a TV's game is turned from upright to horizontal
-- **THEN** the "Tap to join" strips move from the top and bottom edges to the left, right and bottom edges
 
 ### Requirement: Text boxes stay above the on-screen keyboard
 When an on-screen keyboard opens for a text box, the game SHALL move its picture up just enough that the text box being typed in is fully visible above the keyboard, and SHALL move it back when the keyboard closes. Where the box is already above the keyboard, nothing SHALL move.

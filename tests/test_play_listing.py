@@ -181,8 +181,12 @@ def test_scene_builders(scene_game, touch):
     kinds = [d[0] for d in game.select.slots if d]
     assert len(kinds) == 3 and ('touch' in kinds) == touch
     assert game.select.ready[0]
-    strips = game.select.side_buttons.values()
-    assert all(s.opacity == (1 if touch else 0) for s in strips)
+    select = game.select
+    taken = select._taken_seats()
+    for side, strip in select.side_buttons.items():
+        # on a phone a side player closes the bottom seat
+        shown = touch and not main.seat_closed(side, taken, select.seats)
+        assert (strip.parent is not None) == shown
 
     ls.ship_select(game, touch)
     assert isinstance(game.select, main.ShipSelectScreen)

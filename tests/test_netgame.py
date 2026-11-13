@@ -429,7 +429,7 @@ def test_host_toggle_keeps_the_joined_players(env):
     assert game._hosting and select.net is game.net
     assert select.slots[0] == ('keys', 0)
     assert select.network_button.text == 'Local network: On'
-    assert select.device_label(('keys', 0)) == 'Keys set 1 · this device'
+    assert select.device_label(('keys', 0)) == 'Keyboard 1 · this device'
     client = env.new_game()
     client.show_network()
     client.join_game('127.0.0.1', game.net.session.port, 'TV')
@@ -442,7 +442,7 @@ def test_host_toggle_keeps_the_joined_players(env):
     assert not game._hosting and env.announcers[0].closed
     assert select.slots == [('keys', 0), None, None, None]
     assert select.info.text == ''
-    assert select.device_label(('keys', 0)).startswith('Keys W A D')
+    assert select.device_label(('keys', 0)) == 'Keyboard 1'
     assert client.menu_active
     assert client.menu.ids.message.text == 'The host ended the game'
 
@@ -492,7 +492,7 @@ def test_host_join_client_gamepad_takes_the_next_slot(env):
     assert client.select.device_label(('pad', 0)) == \
         'Gamepad 1 · this device'
     assert client.select.device_label(client.net.lobby.slots[0]) == \
-        'Keys set 1 · TV'
+        'Keyboard 1 · TV'
 
 
 def test_host_join_keyboard_set_1_on_both_machines(env):
@@ -962,7 +962,7 @@ def test_watch_tap_to_join_at_the_left_seat(env):
     watcher.has_touch = True
     env.frames(host)
     strip = watcher.prompt.strips['left']
-    assert strip.opacity == 1 and not strip.disabled
+    assert strip.parent is not None and not strip.disabled
     strip.dispatch('on_press')
     env.pump()
     assert host.net.lobby.slots[2] == ('net', 2, ('touch', 'left'))
@@ -970,14 +970,6 @@ def test_watch_tap_to_join_at_the_left_seat(env):
     controls = watcher.controls[2]
     assert controls.side == 'left' and controls.touch_buttons.active
     assert not watcher.prompt.visible
-
-
-def test_client_seats_add_the_bottom_on_a_phone_held_horizontally():
-    """A phone joining another device's game also offers the bottom edge
-    when held horizontally; a local game keeps the two short edges."""
-    assert main.client_seats((800, 400)) == ('left', 'right', 'bottom')
-    assert main.client_seats((400, 800)) == ('top', 'bottom')
-    assert main.touch_seats((800, 400)) == ('left', 'right')
 
 
 def test_client_join_screen_offers_the_bottom(env):
@@ -1001,7 +993,7 @@ def test_watch_tap_to_join_at_the_bottom_held_horizontally(env):
     env.frames(host)
     assert Window.width > Window.height
     strip = watcher.prompt.strips['bottom']
-    assert strip.opacity == 1 and not strip.disabled
+    assert strip.parent is not None and not strip.disabled
     strip.dispatch('on_press')
     env.pump()
     assert host.net.lobby.slots[2] == ('net', 2, ('touch', 'bottom'))
@@ -1012,6 +1004,19 @@ def test_watch_tap_to_join_at_the_bottom_held_horizontally(env):
     assert buttons.stick.y < Window.height / 3
 
 
+def test_watch_prompt_closes_the_bottom_beside_a_side_player(env):
+    host, client = started(env)
+    watcher = env.client(host)
+    watcher.has_touch = True
+    env.frames(host)
+    watcher.prompt.strips['left'].dispatch('on_press')
+    env.pump()
+    env.frames(host)
+    watcher.prompt.show(True, free=1, touch=True, taken={'left'})
+    assert watcher.prompt.strips['right'].parent is not None
+    assert watcher.prompt.strips['bottom'].parent is None
+
+
 def test_watch_prompt_seats_follow_the_phone(env):
     host, client = started(env)
     watcher = env.client(host)
@@ -1020,13 +1025,64 @@ def test_watch_prompt_seats_follow_the_phone(env):
     old = Window.size
     try:
         Window.size = (400, 800)
-        assert set(watcher.prompt.strips) == {'top', 'bottom'}
+        assert set(watcher.prompt.strips) == {'top', 'bottom', 'right'}
         Window.size = (800, 400)
         assert set(watcher.prompt.strips) == {'left', 'right', 'bottom'}
-        assert all(strip.opacity == 1
+        assert all(strip.parent is not None
                    for strip in watcher.prompt.strips.values())
     finally:
         Window.size = old
+
+
+class _Tap:
+    """A finger touching the screen at `pos` (enough for Kivy buttons)."""
+
+    def __init__(self, pos):
+        self.pos = self.opos = pos
+        self.x, self.y = pos
+        self.ud = {}
+        self.is_mouse_scrolling = False
+        self.button = 'left'
+        self.grab_current = None
+        self.time_start = 0
+
+    def grab(self, widget):
+        pass
+
+    def ungrab(self, widget):
+        pass
+
+
+@pytest.mark.parametrize('seat', ['bottom', 'left'])
+@pytest.mark.parametrize('where', ['host', 'client'])
+def test_pause_button_works_under_hidden_join_strips(env, seat, where):
+    """A touch player's Pause button lies where a hidden "Tap to join"
+    strip would be (the middle of the edge), on the host as on a client:
+    the hidden strip lets the tap through."""
+    host = env.host()
+    if where == 'host':
+        host.has_touch = True
+        host.select.join_touch(seat)
+        client = env.client(host)
+        press(client, KEY_SPACE)
+        env.pump()
+        host.select.toggle_ready(0)
+        press(client, KEY_SPACE)
+        env.pump()
+        game = host
+    else:
+        host, client = started(env)
+        game = env.client(host)
+        game.has_touch = True
+        env.frames(host)
+        game.prompt.strips[seat].dispatch('on_press')
+        env.pump()
+    env.frames(host)
+    assert game.in_net_game and not game.prompt.visible
+    status = next(s for s in game.statuses if s.side == seat)
+    assert status.show_menu
+    game.on_touch_down(_Tap(status.ids.pause.center))
+    assert game.paused
 
 
 def test_client_touch_player_out_of_lives_loses_pause(env):

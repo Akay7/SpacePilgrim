@@ -1365,7 +1365,7 @@ def test_join_by_fire_in_order_and_once(kv_game):
     assert join.slots == [None] * 4
     _press(kv_game, KEY_SPACE)                  # keyboard set 1
     assert join.slots[0] == ('keys', 0)
-    assert join.panels[0]['device'].text == 'Keys W A D Space'
+    assert join.panels[0]['device'].text == 'Keyboard 1'
     _pad(kv_game, 1, 0)                         # a gamepad
     assert join.slots[1] == ('pad', 1)
     assert join.panels[1]['device'].text == 'Gamepad 2'
@@ -1439,7 +1439,7 @@ def test_touch_joins_from_a_side_strip(kv_game):
     _press(kv_game, KEY_SPACE)                  # keyboard player 1
     right.dispatch('on_press')                  # first free slot, right side
     assert join.slots[:2] == [('keys', 0), ('touch', 'right')]
-    assert join.panels[1]['device'].text == 'Touch · right side'
+    assert join.panels[1]['device'].text == 'Touch · right'
     assert right.disabled and right.text == 'Player 2 · touch'
     right.dispatch('on_press')                  # side taken: nothing
     assert join.slots[2] is None
@@ -1627,8 +1627,8 @@ def test_join_strips_hidden_without_touchscreen(kv_game):
     game.show_ship_select(2)
     join = game.select
     for strip in join.side_buttons.values():
-        assert strip.opacity == 0 and strip.disabled
-    assert 'tap a side' not in join.panels[0]['empty'].text
+        assert strip.parent is None        # off screen: no room, no taps
+    assert 'tap an edge' not in join.panels[0]['empty'].text
     _press(game, KEY_SPACE)                     # keys and pads still join
     assert join.slots[0] == ('keys', 0)
 
@@ -1642,8 +1642,8 @@ def test_first_touch_shows_join_strips(kv_game):
     game._on_window_touch(None, None)
     assert game.has_touch
     for strip in join.side_buttons.values():
-        assert strip.opacity == 1 and not strip.disabled
-    assert 'tap a side' in join.panels[1]['empty'].text
+        assert strip.parent is not None and not strip.disabled
+    assert 'tap an edge' in join.panels[1]['empty'].text
     join.side_buttons['right'].dispatch('on_press')
     assert join.slots[0] == ('touch', 'right')
 
@@ -1656,19 +1656,21 @@ from kivy.core.window import Window
 
 
 def _pause_button(status):
-    return next(c for c in status.children if c.__class__.__name__ == 'PauseButton')
+    return status.pause_button
 
 
 def test_pause_button_follows_touch_controls(kv_game):
     game = kv_game
     game.game_start()
     button = _pause_button(game.spaceship_status)
-    # keyboard play: no way back needed on screen; a touch shows the button
-    assert button.opacity == 0 and button.disabled
+    # keyboard play: no way back needed on screen; a touch shows the button.
+    # Hidden, it is off screen, so it can not swallow taps
+    assert button.parent is None
     game._on_window_touch(None, None)
-    assert button.opacity == 1 and not button.disabled
+    assert button.parent is game.spaceship_status
+    assert button.parent is not None and not button.disabled
     game._on_key_down(None, KEY_UP)
-    assert button.opacity == 0 and button.disabled
+    assert button.parent is None
 
 
 def test_single_player_pause_button_is_between_the_controls(kv_game):
@@ -1706,7 +1708,7 @@ def test_touch_players_pause_buttons_are_between_their_controls(
         button = _pause_button(status)
         label = status.children[-1]
         stick, fire = controls.touch_buttons.stick, controls.touch_buttons.fire
-        assert button.opacity == 1 and not button.disabled
+        assert button.parent is not None and not button.disabled
         # midway between joystick and FIRE along the side, its outer side
         # on the joystick's outer side, the text further in
         assert button.center_y == pytest.approx(
@@ -2375,15 +2377,15 @@ def test_four_seats_measure_each_axis():
 
 
 def test_touch_seats_follow_the_screen(monkeypatch):
-    assert main.touch_seats((800, 360)) == ('left', 'right')
+    assert main.touch_seats((800, 360)) == ('left', 'right', 'bottom')
     monkeypatch.setattr(main, 'four_seat_screen', lambda *a: True)
     assert main.touch_seats() == ('left', 'right', 'top', 'bottom')
 
 
 @pytest.mark.parametrize('size, seats', [
-    ((800, 360), ('left', 'right')),
-    ((360, 800), ('top', 'bottom')),
-    ((600, 600), ('left', 'right')),     # square counts as wide
+    ((800, 360), ('left', 'right', 'bottom')),   # also held with both thumbs
+    ((360, 800), ('top', 'bottom', 'right')),    # and one long edge
+    ((600, 600), ('left', 'right', 'bottom')),   # square counts as wide
 ])
 def test_touch_seats_at_the_short_edges(size, seats):
     assert main.touch_seats(size) == seats
@@ -2762,8 +2764,8 @@ def test_four_players_join_by_touch_and_start(join4):
         join4.side_buttons[side].dispatch('on_press')
     assert join4.slots == [('touch', 'top'), ('touch', 'left'),
                            ('touch', 'bottom'), ('touch', 'right')]
-    assert join4.panels[0]['device'].text == 'Touch · top side'
-    assert join4.panels[2]['device'].text == 'Touch · bottom side'
+    assert join4.panels[0]['device'].text == 'Touch · top'
+    assert join4.panels[2]['device'].text == 'Touch · bottom'
     for strip in join4.side_buttons.values():
         assert strip.disabled and strip.text.endswith('· touch')
     assert join4.join_touch('top') is None
@@ -2785,18 +2787,20 @@ def test_four_join_strips_hidden_without_touchscreen(kv_game, monkeypatch):
     join = game.select
     assert len(join.side_buttons) == 4
     for strip in join.side_buttons.values():
-        assert strip.opacity == 0 and strip.disabled
+        assert strip.parent is None
     game._on_window_touch(None, None)
     for strip in join.side_buttons.values():
-        assert strip.opacity == 1 and not strip.disabled
+        assert strip.parent is not None and not strip.disabled
     join.side_buttons['bottom'].dispatch('on_press')
     assert join.slots[0] == ('touch', 'bottom')
 
 
-def test_phone_join_screen_keeps_two_strips(kv_game):
+def test_phone_join_screen_strips(kv_game):
+    """A phone held horizontally: the two sides, and the bottom for one
+    player holding it with both thumbs."""
     join = _join(kv_game)
-    assert set(join.side_buttons) == {'left', 'right'}
-    assert 'tap a side' in join.panels[0]['empty'].text
+    assert set(join.side_buttons) == {'left', 'right', 'bottom'}
+    assert 'tap an edge' in join.panels[0]['empty'].text
     assert join.join_touch('top') is None and join.joined == []
 
 

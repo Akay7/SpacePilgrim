@@ -50,7 +50,7 @@ Each player takes a slot with the device they play with, picks a cabin colour an
 | Gamepad | A / X | stick or D-pad left / right | Back / Start |
 | Touch | *Tap to join by touch* strip at your edge of the screen | `<` / `>` | *Leave* |
 
-The game starts when at least two players have joined and all are ready. Up to two players share the keyboard, and up to two play by touch on a phone or four on a tablet (one at each edge); further players use gamepads. On a phone the two touch players sit at its short ends: left and right in landscape, top and bottom in portrait. Touch players get their joystick, FIRE and **Pause** at their own edge, turned toward them. Escape, or Back / Start on a pad that has not joined, returns to the menu.
+The game starts when at least two players have joined and all are ready. Up to two players share the keyboard, and up to two play by touch on a phone or four on a tablet (one at each edge); further players use gamepads. On a phone the two touch players sit at its short ends: left and right in landscape, top and bottom in portrait; or one player sits at a long edge (the bottom in landscape, the right in portrait) and holds it with both thumbs. Touch players get their joystick, FIRE and **Pause** at their own edge, turned toward them. Escape, or Back / Start on a pad that has not joined, returns to the menu.
 
 ### Network game
 
@@ -221,7 +221,7 @@ This renders the store screenshots from the game itself into `store/play/`: five
 
 - every screen fits a phone held upright and follows the window when it turns or is resized; the Multiplayer join screen shows its slots two by two on a narrow screen
 
-- on a phone held upright the two touch players sit at the top and bottom
+- on a phone held upright the two touch players sit at the top and bottom; on every join screen one player can sit at a long edge of a phone instead of two at the short ends
 
 - keyboard and gamepad players' lives and points fit a phone held upright: two per row at the top, or beside the left and right edges when touch players sit at the top and bottom
 
