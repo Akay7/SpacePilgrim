@@ -22,7 +22,7 @@ You have two choices:
 
 ### ToDo
 
-1. Allow multiplayer game on multiple devices.
+1. Network game: try it on real devices over Wi-Fi (phone + TV, phone + desktop) and decide whether the client needs smoothing between snapshots; update the Play Console data-safety answers for the network permissions.
 2. Ship on Android TV: HUD size check and Play Console steps remain (see below).
 
 #### Android TV
@@ -76,13 +76,27 @@ The gamepad buttons for thrust and fire can be changed in **Settings > Gamepad b
 
 *Thrust* takes a trigger as well as a button: select it, then press a button or pull a trigger of the pad (any axis except the left stick; it works whether the trigger rests at -1 or 0), whichever you use is bound. A trigger is then the pad's thrust (its thrust buttons do nothing) and the more you pull, the faster the ship flies; binding a button to Thrust again replaces the trigger. The left stick, D-pad and Back / Start are fixed, and a button already used by the other action is refused. The layouts apply only while a game runs: menus, the join screen, popups and settings always use the standard buttons (A / X confirm, B / Y move up), so remapping never changes how you navigate. **Reset to defaults** resets only the chosen pad. The layouts are saved in `gamepad_buttons.json` in the app's user data directory.
 
+### Network game
+
+**Network game** in the main menu plays one game on several devices on the same Wi-Fi, each player looking at their own screen. One device hosts; it runs the game and the others show its field, scaled to fit their screen (with a faint outline where the field ends when the screen shapes differ).
+
+- **Host a game** opens the join screen, which shows the host's address (for example `Hosting on 192.168.1.20:47400`) and announces the game on the local network once a second.
+- The network screen lists the games it hears (`TV · 2/4`, `TV · in game · 3/4`; a game of another version is shown greyed out); pick one to join. **Enter address** joins by `IP` or `IP:port` when the list stays empty (some networks block broadcasts); the field is prefilled with the last address, or the start of this device's own.
+- Local and remote players share the four slots: every device joins with its own keyboard sets, gamepads and touch strips exactly as on the same-screen join screen, and each slot names the device and the machine it is on (`Gamepad 1 · Pixel 8`, `… · this device`). The game starts when at least two players have joined and all are ready. The host does not need a player of its own, so a TV can be the shared screen.
+- **During a game** a device can connect at any time and watches until one of its devices joins: FIRE on a keyboard set or gamepad, or *Tap to join* at a free touch seat, takes a free slot and a new ship (full lives, no points, away from the asteroids). A player whose ship was destroyed is out until the game ends. A device leaves with *Main menu* on its pause screen, or by closing the app: its ships leave the field, their results are kept, and the slots are free for others. When the host leaves, the game ends for everybody.
+- Pause on any device pauses every device; *Continue* on any device resumes. Touch controls and the *Pause* button of a touch player are only on that player's device.
+- There are no timeouts: a device that goes silent keeps its slot and its ship flies on with its last input until the asteroids get it. Only a closed connection counts as leaving.
+- **Leaderboard**: connected devices exchange their leaderboards, and each keeps the combined top ten, so the best players can come from another device. After a network game the score is saved once, from any device, into every connected device's leaderboard (`Saved on Pixel 8`). *Play again* is on the host; the other devices follow it.
+
+Only game data (slots, input, the field, pause, results and leaderboard entries) goes to the devices of the game; nothing is sent to the internet. The host listens on TCP port 47400 (or the next free one up to 47409) and announces itself by UDP broadcast on port 47401: allow those in a desktop firewall (for example `firewall-cmd --add-port=47400-47409/tcp --add-port=47401/udp`, or allow the app when Windows asks). On Android the app asks for the network permissions this needs (`INTERNET`, `ACCESS_NETWORK_STATE`, `ACCESS_WIFI_STATE`, `CHANGE_WIFI_MULTICAST_STATE`) and holds a Wi-Fi multicast lock only while the network screen searches for games. For the Play Console data-safety form: device names, nicknames and scores only go to the other devices of a game on the local network, never to the developer or a server (see [PRIVACY.md](PRIVACY.md)); check the form's current definitions of "collected" and "shared" against that before publishing. The network code is in `network.py` (standard library only); `tests/test_network.py` and `tests/test_netgame.py` play host and clients over localhost.
+
 ### Pause
 
 In a game, Escape / Back (or a gamepad's Back / Start) pauses; touch players also have a **Pause** button under their lives and points (it goes away once their ship is lost). It freezes the whole game (ships, asteroids, shots, explosions, the scrolling background, the clock) behind a dimmed pause screen with **Continue** and **Main menu**; the pause screen also works with the keyboard and gamepads, and Back / Escape on it continues. **Main menu** leaves the game without the results screen.
 
 ### Game over and leaderboard
 
-When the last ship is lost, a results screen shows each player's time survived (seconds) and points; the points are the rating, and in multiplayer the longest survivor is marked. **Save to leaderboard** asks for a nickname (up to 12 characters, prefilled with the last one used; on a gamepad or remote just accept it with Save) and stores the game's top player (the only player, or the one with most points) with their nickname, points and time in `leaderboard.json` in the app's user data directory; it never leaves the device. **Play again** restarts with the same players, devices and cabin colours, and **Main menu** (or Back / Escape) returns to the menu. The **Leaderboard** entry of the main menu lists the best ten, ordered by points (the time only breaks ties). Leaving a game through the pause screen skips the results screen.
+When the last ship is lost, a results screen shows each player's time survived (seconds) and points; the points are the rating, and in multiplayer the longest survivor is marked. **Save to leaderboard** asks for a nickname (up to 12 characters, prefilled with the last one used; on a gamepad or remote just accept it with Save) and stores the game's top player (the only player, or the one with most points) with their nickname, points and time in `leaderboard.json` in the app's user data directory. It leaves the device only in a network game, whose devices share their leaderboards (see [Network game](#network-game)). **Play again** restarts with the same players, devices and cabin colours, and **Main menu** (or Back / Escape) returns to the menu. The **Leaderboard** entry of the main menu lists the best ten, ordered by points (the time only breaks ties). Leaving a game through the pause screen skips the results screen.
 
 ### Google Play listing images
 

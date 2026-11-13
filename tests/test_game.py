@@ -273,8 +273,8 @@ def test_menu_keyboard_navigation(kv_game):
     assert game.menu.selected == 0
     game._on_key_down(None, 274)  # down
     labels = [b.text for b in game.menu.buttons]
-    assert labels == ['Single player', 'Multiplayer', 'Leaderboard',
-                      'Settings', 'Exit']
+    assert labels == ['Single player', 'Multiplayer', 'Network game',
+                      'Leaderboard', 'Settings', 'Exit']
     assert game.menu.selected == 1
     game._on_key_up(None, 274)
     game._on_key_down(None, 273)  # up wraps back
@@ -461,6 +461,7 @@ def test_rebound_key_drives_ship(game):
 
 def _open_settings(game):
     _press(game, 274)              # down to Multiplayer
+    _press(game, 274)              # down to Network game
     _press(game, 274)              # down to Leaderboard
     _press(game, 274)              # down to Settings
     game._on_key_down(None, KEY_ENTER)
@@ -523,7 +524,7 @@ def test_settings_rebind_fire_in_game(kv_game):
     assert game.settings.buttons[3].text == 'Fire: F'
     assert game.settings.waiting == ''
     game.close_settings()
-    game.menu.move(-3)                   # back to "Single player"
+    game.menu.move(-4)                   # back to "Single player"
     _press(game, KEY_ENTER)              # ship selection
     _press(game, KEY_ENTER)              # ready: start the game
     game._on_key_down(None, KEY_F)
@@ -1878,6 +1879,11 @@ def test_elapsed_counts_only_while_ships_fly(kv_game):
     assert game.elapsed == pytest.approx(0.75)
 
 
+def _scores(entries):
+    """Leaderboard entries without their ids."""
+    return [{k: v for k, v in e.items() if k != 'id'} for e in entries]
+
+
 def test_leaderboard_orders_caps_and_persists(tmp_path):
     path = str(tmp_path / 'lb.json')
     board = main.Leaderboard(path)
@@ -1894,9 +1900,9 @@ def test_leaderboard_orders_caps_and_persists(tmp_path):
 def test_leaderboard_tolerates_corrupt_file(tmp_path):
     path = tmp_path / 'lb.json'
     path.write_text('{nope')
-    assert main.Leaderboard(str(path)).entries == []
+    assert _scores(main.Leaderboard(str(path)).entries) == []
     path.write_text('{"entries": [{"points": "x"}, {"points": 3, "seconds": 9}]}')
-    assert main.Leaderboard(str(path)).entries == [
+    assert _scores(main.Leaderboard(str(path)).entries) == [
         {'name': 'Player', 'points': 3, 'seconds': 9}]
 
 
@@ -1926,7 +1932,7 @@ def test_save_score_once_saves_top_player(kv_game, tmp_path):
     assert game.results_active and screen.saved
     screen.save_score()    # only once
     assert not game.name_active
-    assert game.leaderboard.entries == [
+    assert _scores(game.leaderboard.entries) == [
         {'name': 'Ann', 'points': 9, 'seconds': 30}]
 
 
@@ -2132,15 +2138,90 @@ def test_gamepad_saves_prefilled_nickname(kv_game, tmp_path):
     game._on_joy_button_down(None, 0, 0)     # A: Save is selected first
     game._on_joy_button_up(None, 0, 0)
     assert game.results_active
-    assert game.leaderboard.entries == [
+    assert _scores(game.leaderboard.entries) == [
         {'name': 'Player', 'points': 5, 'seconds': 0}]
 
 
 def test_leaderboard_reads_files_without_names(tmp_path):
     path = tmp_path / 'lb.json'
     path.write_text('{"entries": [{"points": 3, "seconds": 9}]}')
-    assert main.Leaderboard(str(path)).entries == [
+    assert _scores(main.Leaderboard(str(path)).entries) == [
         {'name': 'Player', 'points': 3, 'seconds': 9}]
+
+
+def test_leaderboard_version_1_file_gets_ids_same_order(tmp_path):
+    path = tmp_path / 'lb.json'
+    path.write_text(json.dumps({'version': 1, 'last_name': 'Ann', 'entries': [
+        {'name': 'Ann', 'points': 30, 'seconds': 40},
+        {'name': 'Bob', 'points': 12, 'seconds': 50},
+        {'name': 'Cy', 'points': 12, 'seconds': 50}]}))
+    board = main.Leaderboard(str(path))
+    assert _scores(board.entries) == [
+        {'name': 'Ann', 'points': 30, 'seconds': 40},
+        {'name': 'Bob', 'points': 12, 'seconds': 50},
+        {'name': 'Cy', 'points': 12, 'seconds': 50}]
+    ids = [e['id'] for e in board.entries]
+    assert len(set(ids)) == 3 and all(main.Leaderboard.valid_id(i) for i in ids)
+    assert board.last_name == 'Ann'
+    board.save()
+    data = json.loads(path.read_text())
+    assert data['version'] == 2
+    assert [e['id'] for e in main.Leaderboard(str(path)).entries] == ids
+
+
+def test_leaderboard_merge_adds_once_and_keeps_best(tmp_path):
+    path = str(tmp_path / 'lb.json')
+    board = main.Leaderboard(path)
+    board.add(12, 20, 'Host')
+    phone = [main.Leaderboard.new_entry(30, 61, 'Ann'),
+             main.Leaderboard.new_entry(5, 9, 'Bob')]
+    assert board.merge(phone)
+    assert [e['name'] for e in board.entries] == ['Ann', 'Host', 'Bob']
+    assert not board.merge(phone)               # same ids: nothing new
+    assert not board.merge([dict(e) for e in board.entries])
+    assert len(board.entries) == 3
+    again = main.Leaderboard(path)              # kept after a restart
+    assert [e['name'] for e in again.entries] == ['Ann', 'Host', 'Bob']
+    assert again.last_name == 'Host'            # merging never changes it
+
+
+def test_leaderboard_merge_skips_invalid_entries(tmp_path):
+    board = main.Leaderboard(str(tmp_path / 'lb.json'))
+    assert not board.merge([
+        {'id': 'zz!', 'name': 'Bad', 'points': 1, 'seconds': 1},
+        {'name': 'No id', 'points': 1, 'seconds': 1},
+        {'id': 'ab', 'name': 'Neg', 'points': -1, 'seconds': 1},
+        {'id': 'cd', 'name': 'Str', 'points': '9', 'seconds': 1},
+        'junk'])
+    assert board.entries == []
+    assert board.merge([{'id': 'ef', 'name': '  ' + 'x' * 20, 'points': 2,
+                         'seconds': 3}])
+    assert _scores(board.entries) == [
+        {'name': 'x' * 12, 'points': 2, 'seconds': 3}]
+
+
+def test_leaderboard_merge_beyond_ten_keeps_ten(tmp_path):
+    board = main.Leaderboard(str(tmp_path / 'lb.json'))
+    for i in range(10):
+        board.add(100 + i, 1)
+    assert not board.merge([main.Leaderboard.new_entry(1, 1, 'Low')])
+    assert board.merge([main.Leaderboard.new_entry(500, 1, 'Top')])
+    assert len(board.entries) == 10 and board.entries[0]['name'] == 'Top'
+
+
+def test_leaderboard_version_2_file_readable_by_version_1_logic(tmp_path):
+    # what the previous app version did with the file: only name, points
+    # and seconds of each entry are read, extra fields are ignored
+    path = tmp_path / 'lb.json'
+    board = main.Leaderboard(str(path))
+    board.add(7, 8, 'Ann')
+    data = json.loads(path.read_text())
+    old = [{'name': main.clean_name(e.get('name', main.DEFAULT_NAME)),
+            'points': e['points'], 'seconds': e['seconds']}
+           for e in data['entries'] if isinstance(e, dict)
+           and all(type(e.get(k)) is int and e[k] >= 0
+                   for k in ('points', 'seconds'))]
+    assert old == [{'name': 'Ann', 'points': 7, 'seconds': 8}]
 
 
 def test_pause_stops_the_scrolling_background(kv):

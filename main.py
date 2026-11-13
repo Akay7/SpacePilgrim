@@ -1,10 +1,13 @@
 __version__ = "0.5.0"
 
 import colorsys
+import itertools
 import json
 import math
 import os
+import socket
 import sys
+import uuid
 from collections import namedtuple
 from functools import partial
 from random import randint, choice
@@ -41,7 +44,7 @@ from kivy.properties import (
 )
 from kivy.graphics import (
     Color, Ellipse, Line, PopMatrix, PushMatrix, Rectangle, RoundedRectangle,
-    Rotate, Triangle,
+    Rotate, Scale, Translate, Triangle,
 )
 from kivy.metrics import Metrics, dp, cm
 from kivy.vector import Vector
@@ -50,6 +53,8 @@ from kivy.logger import Logger
 
 from kivy.core.image import Image
 from kivy.graphics.texture import Texture
+
+import network
 
 
 # Window key codes (SDL2) -> actions. Android TV remote D-pad and a gamepad
@@ -682,11 +687,14 @@ def top_result(results):
 
 
 class Leaderboard:
-    """The best games played on this device, as JSON: one entry per saved
-    game with the player's nickname, points (the rating) and the seconds
-    survived (information, only breaks ties); also the last nickname used. Best first, at most LEADERBOARD_SIZE entries."""
+    """The best games, as JSON: one entry per saved game with an id, the
+    player's nickname, points (the rating) and the seconds survived
+    (information, only breaks ties); also the last nickname used on this
+    device. Best first, at most LEADERBOARD_SIZE entries. Devices of a
+    network game exchange their entries (`merge`); the ids keep an entry
+    from being counted twice."""
 
-    VERSION = 1
+    VERSION = 2
 
     def __init__(self, path=None):
         self.path = path
@@ -698,16 +706,69 @@ class Leaderboard:
     def _rank(entry):
         return (-entry['points'], -entry['seconds'])
 
+    @staticmethod
+    def new_id():
+        return uuid.uuid4().hex[:16]
+
+    @classmethod
+    def new_entry(cls, points, seconds, name=DEFAULT_NAME):
+        return {'id': cls.new_id(), 'name': clean_name(name),
+                'points': int(points), 'seconds': int(seconds)}
+
+    @staticmethod
+    def valid_id(ident):
+        return (isinstance(ident, str) and 0 < len(ident) <= 32
+                and all(c in '0123456789abcdef' for c in ident))
+
+    @classmethod
+    def _valid(cls, entry, keep_id=True):
+        """The entry as stored, None if it can not be one. Without a valid
+        id (files of version 1) it gets a new one."""
+        if not (isinstance(entry, dict)
+                and all(type(entry.get(k)) is int and entry[k] >= 0
+                        for k in ('points', 'seconds'))):
+            return None
+        ident = entry.get('id')
+        if not cls.valid_id(ident):
+            if keep_id is False:
+                return None
+            ident = cls.new_id()
+        return {'id': ident,
+                'name': clean_name(entry.get('name', DEFAULT_NAME)),
+                'points': entry['points'], 'seconds': entry['seconds']}
+
+    def _keep_best(self):
+        self.entries.sort(key=self._rank)
+        del self.entries[LEADERBOARD_SIZE:]
+
     def add(self, points, seconds, name=DEFAULT_NAME):
         """Keep the game in the top entries and write the file. False when
         the file could not be written (the entry stays for this session)."""
-        name = clean_name(name)
-        self.last_name = name
-        self.entries.append({'name': name, 'points': int(points),
-                             'seconds': int(seconds)})
-        self.entries.sort(key=self._rank)
-        del self.entries[LEADERBOARD_SIZE:]
+        entry = self.new_entry(points, seconds, name)
+        self.last_name = entry['name']
+        self.entries.append(entry)
+        self._keep_best()
         return self.save()
+
+    def merge(self, entries):
+        """Take the entries of another device that are not here yet (by
+        id), keep the best and write the file. True if the list changed."""
+        known = {e['id'] for e in self.entries}
+        new = []
+        for entry in entries:
+            entry = self._valid(entry, keep_id=False)
+            if entry is not None and entry['id'] not in known:
+                known.add(entry['id'])
+                new.append(entry)
+        if not new:
+            return False
+        before = [e['id'] for e in self.entries]
+        self.entries += new
+        self._keep_best()
+        if [e['id'] for e in self.entries] == before:
+            return False
+        self.save()
+        return True
 
     def load(self):
         if not self.path:
@@ -720,14 +781,16 @@ class Leaderboard:
         entries = data.get('entries') if isinstance(data, dict) else None
         if not isinstance(entries, list):
             return
-        valid = [{'name': clean_name(e.get('name', DEFAULT_NAME)),
-                  'points': e['points'], 'seconds': e['seconds']}
-                 for e in entries
-                 if isinstance(e, dict)
-                 and all(type(e.get(k)) is int and e[k] >= 0
-                         for k in ('points', 'seconds'))]
-        valid.sort(key=self._rank)
-        self.entries = valid[:LEADERBOARD_SIZE]
+        valid, seen = [], set()
+        for entry in entries:
+            entry = self._valid(entry)
+            if entry is not None:
+                if entry['id'] in seen:
+                    entry['id'] = self.new_id()
+                seen.add(entry['id'])
+                valid.append(entry)
+        self.entries = valid
+        self._keep_best()
         if isinstance(data.get('last_name'), str):
             self.last_name = clean_name(data['last_name'])
 
@@ -761,7 +824,10 @@ def declare_java_classes():
     global _java_declared
     if _java_declared:
         return
-    from jnius import JavaClass, MetaJavaClass, JavaMethod, JavaStaticMethod
+    from jnius import (
+        JavaClass, MetaJavaClass, JavaMethod, JavaStaticField,
+        JavaStaticMethod,
+    )
     from android import api_version
 
     class PackageManager(JavaClass, metaclass=MetaJavaClass):
@@ -777,6 +843,21 @@ def declare_java_classes():
     class View(JavaClass, metaclass=MetaJavaClass):
         __javaclass__ = 'android/view/View'
         setSystemUiVisibility = JavaMethod('(I)V')
+
+    class Build(JavaClass, metaclass=MetaJavaClass):
+        __javaclass__ = 'android/os/Build'
+        MODEL = JavaStaticField('Ljava/lang/String;')
+
+    class WifiManager(JavaClass, metaclass=MetaJavaClass):
+        __javaclass__ = 'android/net/wifi/WifiManager'
+        createMulticastLock = JavaMethod(
+            '(Ljava/lang/String;)Landroid/net/wifi/WifiManager$MulticastLock;')
+
+    class MulticastLock(JavaClass, metaclass=MetaJavaClass):
+        __javaclass__ = 'android/net/wifi/WifiManager$MulticastLock'
+        acquire = JavaMethod('()V')
+        release = JavaMethod('()V')
+        setReferenceCounted = JavaMethod('(Z)V')
 
     if api_version >= 30:   # a class missing on older Android would raise
         class WindowInsetsController(JavaClass, metaclass=MetaJavaClass):
@@ -1108,9 +1189,16 @@ class Explosion(Widget):
         self.parent.remove_widget(self)
 
 
+NET_IDS = itertools.count(1)   # ids of asteroids and shots in snapshots
+
+
 class Asteroid(Widget):
     speed = NumericProperty(4)
     angle = NumericProperty(0)
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.net_id = next(NET_IDS)
 
     def update(self, dt):
         for i in [0, 1]:
@@ -1131,6 +1219,7 @@ class Shot(Widget):
 
     def __init__(self, **kwargs):
         super(Shot, self).__init__(**kwargs)
+        self.net_id = next(NET_IDS)
         self.sound.play()
 
     def update(self, dt):
@@ -1345,10 +1434,14 @@ class ResultsScreen(ButtonColumn):
     # ignore presses for a moment: players are still pressing FIRE
     GUARD = 1.0
 
-    def __init__(self, results, **kwargs):
+    def __init__(self, results, network=None, **kwargs):
         super().__init__(**kwargs)
         self.results = results
+        self.network = network     # None, 'host' or 'client'
         self.saved = False
+        if network == 'client':    # only the host starts the next game
+            self.ids.btn_again.text = 'Waiting for the host'
+            self.ids.btn_again.disabled = True
         self.armed_at = Clock.get_time() + self.GUARD
         longest = max(r.survived for r in results)
         for result in results:
@@ -1377,6 +1470,17 @@ class ResultsScreen(ButtonColumn):
         self.parent.show_name_entry()
 
     def store_score(self, name):
+        if self.saved:
+            return
+        if self.network is not None:
+            # stored once for every device of the network game, by the host
+            self.saved = True
+            self.ids.btn_save.text = 'Saving…'
+            self.ids.btn_save.disabled = True
+            self.selected = 0
+            self.highlight()
+            self.parent.net.save_score(name)
+            return
         best = top_result(self.results)
         ok = self.parent.leaderboard.add(best.points, best.survived, name)
         self.saved = True
@@ -1384,6 +1488,15 @@ class ResultsScreen(ButtonColumn):
         self.ids.btn_save.disabled = True
         self.ids.message.text = ('' if ok else
                                  'Could not write the file; kept until exit')
+        self.selected = 0
+        self.highlight()
+
+    def mark_saved(self, by):
+        """A network game's score was saved, here or on device `by`."""
+        self.saved = True
+        self.ids.btn_save.text = 'Saved on {}'.format(by)
+        self.ids.btn_save.disabled = True
+        self.ids.message.text = ''
         self.selected = 0
         self.highlight()
 
@@ -2250,9 +2363,114 @@ class ShipSelectScreen(BoxLayout):
             self.parent.close_ship_select()
 
 
+def is_remote(device):
+    """A device of another machine of a network game: ('net', peer, device)."""
+    return bool(device) and device[0] == 'net'
+
+
+def local_device(device):
+    """The device as its own machine names it."""
+    return device[2] if is_remote(device) else device
+
+
 def device_kind(device):
-    """'keys', 'pad' or 'touch' for a device of the join screen."""
+    """'keys', 'pad' or 'touch' for a device of the join screen (also for a
+    device of another machine)."""
+    device = local_device(device)
     return device[0] if device else None
+
+
+def touch_seat(device):
+    """The seat of a touch player on this machine's screen, else ''."""
+    if device and not is_remote(device) and device[0] == 'touch':
+        return device[1]
+    return ''
+
+
+class Lobby:
+    """The player slots of a multiplayer game: which device holds each of
+    the MAX_PLAYERS slots, who is ready, and the colours (ShipColors). A
+    device is ('keys', set), ('pad', stick), ('touch', seat) or, in a
+    network game, ('net', peer, device) for a device of another machine.
+
+    A same-screen game's lobby lives as long as its join screen; a network
+    host keeps one for the whole session, so players can also join and
+    leave while a game runs. `out` marks a slot whose ship was destroyed
+    (it stays out until the game ends)."""
+
+    def __init__(self, colors):
+        self.ship_colors = colors
+        self.slots = [None] * MAX_PLAYERS
+        self.ready = [False] * MAX_PLAYERS
+        self.out = [False] * MAX_PLAYERS
+        self.in_game = False
+        self.names = {}       # network: peer -> machine name
+
+    @property
+    def joined(self):
+        return [i for i, device in enumerate(self.slots) if device]
+
+    @property
+    def free(self):
+        return self.slots.count(None)
+
+    def slot_of(self, device):
+        if device is None or device not in self.slots:
+            return None
+        return self.slots.index(device)
+
+    @property
+    def can_start(self):
+        joined = self.joined
+        return len(joined) >= 2 and all(self.ready[i] for i in joined)
+
+    def join(self, device, slot=None):
+        """`device` takes `slot` (default: the first free one). Returns the
+        slot, or None when the device already plays or nothing is free."""
+        if device is None or device in self.slots:
+            return None
+        if slot is None:
+            slot = next((i for i, d in enumerate(self.slots) if d is None),
+                        None)
+        if slot is None or self.slots[slot] is not None:
+            return None
+        self.slots[slot] = device
+        self.ready[slot] = False
+        self.out[slot] = False
+        self.ship_colors.claim(slot, self.joined)
+        return slot
+
+    def leave(self, slot):
+        self.slots[slot] = None
+        self.ready[slot] = False
+        self.out[slot] = False
+
+    def change(self, slot, step):
+        """Next / previous colour for `slot`, until the player is ready."""
+        if self.slots[slot] is None or self.ready[slot]:
+            return False
+        self.ship_colors.cycle(slot, step, active=self.joined)
+        return True
+
+    def toggle_ready(self, slot):
+        if self.slots[slot] is None:
+            return False
+        self.ready[slot] = not self.ready[slot]
+        return True
+
+    def state(self, slot):
+        """How the slot is shown to the other machines."""
+        if self.slots[slot] is None:
+            return None
+        if self.out[slot]:
+            return 'out'
+        if self.in_game:
+            return 'playing'
+        return 'ready' if self.ready[slot] else 'joined'
+
+    def peer_slots(self, peer):
+        return [i for i, d in enumerate(self.slots)
+                if is_remote(d) and d[1] == peer]
 
 
 class SideJoinButton(ButtonBehavior, Widget):
@@ -2317,15 +2535,19 @@ class JoinScreen(BoxLayout):
     STRIP_WIDTH = dp(64)
 
     def __init__(self, colors, bindings, touch=True, seats=TOUCH_SIDES,
-                 **kwargs):
+                 lobby=None, net=None, **kwargs):
         super().__init__(spacing=dp(10), **kwargs)
         self.ship_colors = colors
         self.bindings = bindings
         self.touch = touch      # offer joining by touch (side strips)
         self.seats = seats      # touch seats: left and right, or every edge
         four = 'top' in seats
-        self.slots = [None] * MAX_PLAYERS
-        self.ready = [False] * MAX_PLAYERS
+        self.lobby = lobby if lobby is not None else Lobby(colors)
+        # network game: the host's or client's session glue. A client only
+        # shows the host's slots; its devices ask the host to change them.
+        self.net = net
+        self.mirror = net if net is not None and net.role == 'client' else None
+        self.on_change = None   # called after every change (host: tell all)
         self.flashing = [False] * MAX_PLAYERS
         # the whole window width (and with four seats its height), so the
         # touch strips are at the screen edges; fits small phones (about
@@ -2357,6 +2579,11 @@ class JoinScreen(BoxLayout):
         bottom.add_widget(self.back_button)
         bottom.add_widget(self.message)
         middle.add_widget(bottom)
+        if net is not None:
+            # where the game is hosted, above the panels
+            self.info = Label(size_hint_y=None, height=dp(24),
+                              font_size='14dp')
+            middle.add_widget(self.info, index=len(middle.children))
         centre = (Widget(), middle, Widget())
         if four:
             # top and bottom strips between the left and right ones, the
@@ -2407,7 +2634,8 @@ class JoinScreen(BoxLayout):
             'panel': panel, 'border': border, 'border_color': border_color,
             'title': Label(text='Player {}'.format(slot + 1), bold=True,
                            size_hint_y=None, height=dp(28)),
-            'device': Label(size_hint_y=None, height=dp(24)),
+            'device': Label(size_hint_y=None, height=dp(24), shorten=True,
+                            shorten_from='right'),
             'preview': ShipPreview(),
             'name': name, 'prev': prev, 'next': nxt,
             'colour_row': row(prev, name, nxt),
@@ -2419,6 +2647,8 @@ class JoinScreen(BoxLayout):
         }
         empty = widgets['empty']
         empty.bind(size=lambda label, size: setattr(label, 'text_size', size))
+        widgets['device'].bind(
+            width=lambda label, width: setattr(label, 'text_size', (width, None)))
         self.panels.append(widgets)
         return panel
 
@@ -2430,33 +2660,30 @@ class JoinScreen(BoxLayout):
     # ---- state ---------------------------------------------------------
 
     @property
+    def slots(self):
+        return self.lobby.slots
+
+    @property
+    def ready(self):
+        return self.lobby.ready
+
+    @property
     def joined(self):
-        return [i for i, device in enumerate(self.slots) if device]
+        return self.lobby.joined
 
     def slot_of(self, device):
-        if device is None or device not in self.slots:
-            return None
-        return self.slots.index(device)
+        return self.lobby.slot_of(device)
 
     @property
     def can_start(self):
-        joined = self.joined
-        return len(joined) >= 2 and all(self.ready[i] for i in joined)
+        return self.lobby.can_start
 
     def join(self, device, slot=None):
         """`device` takes `slot` (default: the first free one). Returns the
         slot, or None when the device already plays or nothing is free."""
-        if device is None or device in self.slots:
-            return None
-        if slot is None:
-            slot = next((i for i, d in enumerate(self.slots) if d is None),
-                        None)
-        if slot is None or self.slots[slot] is not None:
-            return None
-        self.slots[slot] = device
-        self.ready[slot] = False
-        self.ship_colors.claim(slot, self.joined)
-        self.refresh()
+        slot = self.lobby.join(device, slot)
+        if slot is not None:
+            self.refresh()
         return slot
 
     def join_touch(self, side):
@@ -2465,38 +2692,56 @@ class JoinScreen(BoxLayout):
         this screen."""
         if side not in self.seats:
             return None
+        if self.mirror:
+            self.mirror.touch(side=side)
+            return None
         return self.join(('touch', side))
 
     def leave(self, slot):
-        self.slots[slot] = None
-        self.ready[slot] = False
+        if self.mirror:
+            self.mirror.touch(slot=slot, button='leave')
+            return
+        self.lobby.leave(slot)
         self.refresh()
         self._maybe_start()
 
     def change(self, slot, step):
         """Next / previous colour for `slot`, until the player is ready."""
-        if self.slots[slot] is None or self.ready[slot]:
+        if self.mirror:
+            self.mirror.touch(slot=slot, button='prev' if step < 0 else 'next')
             return
-        self.ship_colors.cycle(slot, step, active=self.joined)
-        self.refresh()
+        if self.lobby.change(slot, step):
+            self.refresh()
 
     def toggle_ready(self, slot):
-        if self.slots[slot] is None:
+        if self.mirror:
+            self.mirror.touch(slot=slot, button='ready')
             return
-        self.ready[slot] = not self.ready[slot]
-        self.refresh()
-        self._maybe_start()
+        if self.lobby.toggle_ready(slot):
+            self.refresh()
+            self._maybe_start()
 
     def _maybe_start(self):
-        if self.can_start and self.parent is not None:
+        if self.can_start and self.parent is not None and not self.mirror:
             self.parent.start_joined()
 
     def handle(self, device, action):
         """A press of `action` from `device` (None: Escape)."""
         slot = self.slot_of(device)
+        if self.mirror:
+            # the host decides; the client only lights up its own slot
+            if slot is None and action == 'back':
+                self.go_back()
+                return
+            if slot is not None:
+                self.flash(slot)
+            if device is not None:
+                self.mirror.act(device, action)
+            return
         if slot is None:
             if action == 'back':
-                self.go_back()     # Escape, or a pad that has not joined
+                if not is_remote(device):
+                    self.go_back()     # Escape, or a pad that has not joined
             elif action == 'fire' and device_kind(device) in ('keys', 'pad'):
                 slot = self.join(device)
                 if slot is not None:
@@ -2535,15 +2780,26 @@ class JoinScreen(BoxLayout):
     # ---- drawing -------------------------------------------------------
 
     def device_label(self, device):
-        kind, key = device
+        remote = is_remote(device)
+        kind, key = local_device(device)
         if kind == 'keys':
-            return 'Keys ' + ' '.join(
-                self.bindings.label(a, key) for a in ('up', 'left', 'right', 'fire'))
-        if kind == 'pad':
-            return 'Gamepad {}'.format(key + 1)
-        return 'Touch · {} side'.format(key)
+            # a network game names the machine instead of the keys (another
+            # machine's keys may be bound differently; the hint lists ours)
+            text = ('Keys set {}'.format(key + 1) if self.net is not None else
+                    'Keys ' + ' '.join(self.bindings.label(a, key)
+                                       for a in ('up', 'left', 'right', 'fire')))
+        elif kind == 'pad':
+            text = 'Gamepad {}'.format(key + 1)
+        else:
+            text = 'Touch · {} side'.format(key)
+        if self.net is not None:
+            text += ' · ' + (self.lobby.names.get(device[1], '?') if remote
+                             else 'this device')
+        return text
 
     def device_hint(self, device):
+        if is_remote(device):
+            return 'Plays on that device'
         kind, key = device
         if kind == 'keys':
             label = partial(self.bindings.label, key_set=key)
@@ -2581,10 +2837,15 @@ class JoinScreen(BoxLayout):
             w['border_color'].rgba = (*rgb, 1 if self.flashing[slot] else 0.6)
             w['border'].width = dp(4) if self.flashing[slot] else dp(1.5)
             w['device'].text = self.device_label(device)
+            if self.net is not None:
+                w['device'].font_size = '13dp'
             w['device'].color = (*rgb, 1)
             w['preview'].texture = cabin_textures(color)[0]
             w['name'].text = color.capitalize()
             w['ready'].text = 'Ready!' if self.ready[slot] else 'Ready?'
+            # only the machine of a player changes that player's slot
+            for name in ('prev', 'next', 'ready', 'leave'):
+                w[name].disabled = is_remote(device)
             w['hint'].text = self.device_hint(device)
             for name in ('device', 'preview', 'colour_row', 'action_row',
                          'hint'):
@@ -2596,6 +2857,818 @@ class JoinScreen(BoxLayout):
             self.message.text = 'At least two players join to start'
         else:
             self.message.text = 'Starts when everyone is ready'
+        if self.on_change is not None:
+            self.on_change()
+
+
+# ---- network game ------------------------------------------------------------
+
+NET_POLL = 1 / 30     # seconds between polls of the network outside a frame
+
+
+def make_browser():
+    return network.Browser()
+
+
+def make_host_session(name):
+    return network.HostSession(name)
+
+
+def make_announcer(name, port):
+    return network.Announcer(name, port)
+
+
+def make_client_session(host, port, name):
+    return network.ClientSession(host, port, name)
+
+
+def device_name():
+    """How other players see this machine: the model on Android, else the
+    host name."""
+    if platform == 'android':
+        try:
+            declare_java_classes()
+            from jnius import autoclass
+            model = autoclass('android.os.Build').MODEL
+            if model:
+                return str(model)[:network.NAME_LIMIT]
+        except Exception as e:   # noqa: BLE001 - any jnius failure
+            Logger.warning('SpacePilgrim: no device model: %s', e)
+    try:
+        name = socket.gethostname()
+    except OSError:
+        name = ''
+    return (name or 'SpacePilgrim')[:network.NAME_LIMIT]
+
+
+class MulticastLock:
+    """Android: many Wi-Fi drivers drop broadcasts to apps that do not hold
+    a multicast lock, so the network screen holds one while it searches
+    for games. Nothing to do elsewhere."""
+
+    def __init__(self):
+        self.lock = None
+
+    def acquire(self):
+        if platform != 'android' or self.lock is not None:
+            return False
+        try:
+            declare_java_classes()
+            from jnius import autoclass, cast
+            activity = autoclass('org.kivy.android.PythonActivity').mActivity
+            wifi = cast('android.net.wifi.WifiManager',
+                        activity.getSystemService('wifi'))
+            lock = wifi.createMulticastLock('spacepilgrim')
+            lock.setReferenceCounted(False)
+            lock.acquire()
+            self.lock = lock
+            return True
+        except Exception as e:   # noqa: BLE001 - any jnius failure
+            Logger.warning('SpacePilgrim: no multicast lock: %s', e)
+            return False
+
+    def release(self):
+        if self.lock is not None:
+            try:
+                self.lock.release()
+            except Exception:   # noqa: BLE001
+                pass
+            self.lock = None
+
+
+class NetworkSettings:
+    """The host address typed last, as JSON."""
+
+    def __init__(self, path=None):
+        self.path = path
+        self.last_address = ''
+        self.load()
+
+    def default_address(self):
+        """The last address, or the start of this device's own one (the
+        host is usually on the same /24 network)."""
+        if self.last_address:
+            return self.last_address
+        parts = network.local_address().split('.')
+        return '.'.join(parts[:3]) + '.' if len(parts) == 4 else ''
+
+    def load(self):
+        if not self.path:
+            return
+        try:
+            with open(self.path) as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return
+        address = data.get('last_address') if isinstance(data, dict) else None
+        if isinstance(address, str) and len(address) <= 64:
+            self.last_address = address
+
+    def save(self):
+        if not self.path:
+            return
+        try:
+            os.makedirs(os.path.dirname(self.path) or '.', exist_ok=True)
+            with open(self.path, 'w') as f:
+                json.dump({'last_address': self.last_address}, f)
+        except OSError:
+            pass
+
+
+class NetworkScreen(ButtonColumn):
+    """Network game: host one, join one announced on this Wi-Fi, or give a
+    host's address. The list follows the announcements as they come."""
+    ROW = dp(44)
+
+    def __init__(self, browser, message='', **kwargs):
+        self.browser = browser      # None when the network can not be read
+        self.games = []
+        self._signature = None
+        self.message_text = message
+        super().__init__(orientation='vertical', spacing=dp(8),
+                         size_hint=(None, None), **kwargs)
+        self.rebuild()
+        self.event = Clock.schedule_interval(self.poll, NET_POLL)
+        Window.bind(size=self._place)
+
+    def poll(self, dt=0):
+        games = self.browser.poll() if self.browser is not None else []
+        signature = [(g.key, g.name, g.players, g.playing, g.compatible)
+                     for g in games]
+        if signature != self._signature:
+            self._signature = signature
+            self.games = games
+            self.rebuild()
+
+    @staticmethod
+    def game_label(game):
+        if not game.compatible:
+            return '{} · other version'.format(game.name)
+        return '{} · {}{}/{}'.format(game.name,
+                                     'in game · ' if game.playing else '',
+                                     game.players, MAX_PLAYERS)
+
+    def _button(self, key, text, on_press, disabled=False):
+        button = Button(text=text, size_hint_y=None, height=self.ROW,
+                        disabled=disabled, shorten=True,
+                        on_press=lambda *a: on_press())
+        button.bind(width=lambda b, w: setattr(b, 'text_size', (w - dp(16), None)))
+        button.key = key
+        return button
+
+    def rebuild(self):
+        buttons = self.buttons
+        chosen = (buttons[self.selected % len(buttons)].key
+                  if buttons else None)
+        self.clear_widgets()
+        game = lambda: self.parent       # noqa: E731 - the SpacePilgrimGame
+        widgets = [Label(text='Network game', font_size='24dp',
+                         size_hint_y=None, height=dp(36)),
+                   self._button('host', 'Host a game',
+                                lambda: game().host_game())]
+        for found in self.games:
+            widgets.append(self._button(
+                ('game',) + found.key, self.game_label(found),
+                partial(self._join, found), disabled=not found.compatible))
+        if not self.games:
+            widgets.append(Label(text='Searching for games on this Wi-Fi…',
+                                 font_size='14dp', size_hint_y=None,
+                                 height=dp(28)))
+        widgets += [self._button('address', 'Enter address',
+                                 lambda: game().show_address()),
+                    self._button('back', 'Back', lambda: game().close_network())]
+        self.message = Label(text=self.message_text, font_size='14dp',
+                             size_hint_y=None, height=dp(40), halign='center',
+                             valign='middle')
+        self.message.bind(size=lambda l, s: setattr(l, 'text_size', s))
+        widgets.append(self.message)
+        for widget in widgets:
+            self.add_widget(widget)
+        keys = [b.key for b in self.buttons]
+        self.selected = keys.index(chosen) if chosen in keys else 0
+        self._place()
+        self.highlight()
+
+    def _join(self, found):
+        if self.parent is not None and found.compatible:
+            self.parent.join_game(found.address, found.port, found.name)
+
+    def _place(self, *args):
+        height = (sum(c.height for c in self.children)
+                  + self.spacing * (len(self.children) - 1))
+        self.size = (dp(340), min(height, Window.height - dp(10)))
+        self.pos = ((Window.width - self.width) / 2,
+                    (Window.height - self.height) / 2)
+
+    def set_message(self, text):
+        self.message_text = text
+        self.message.text = text
+
+    def close(self):
+        self.event.cancel()
+        Window.unbind(size=self._place)
+        if self.browser is not None:
+            self.browser.close()
+            self.browser = None
+
+
+class AddressScreen(ButtonColumn):
+    """The host's address typed in (IP or IP:port), for networks where the
+    announcements do not arrive."""
+
+    def __init__(self, address, **kwargs):
+        super().__init__(**kwargs)
+        field = self.ids.field
+        field.text = address
+        field.focus = True
+
+    def accept(self):
+        self.parent.address_done(self.ids.field.text)
+
+    def cancel(self):
+        self.parent.address_done(None)
+
+
+class FieldView(Widget):
+    """A client's view of the host's field: the host's window scaled to fit
+    this one, keeping its proportions and centred, with a faint outline
+    where the field ends. Children are placed in the host's coordinates."""
+
+    def __init__(self, field, **kwargs):
+        super().__init__(**kwargs)
+        self.field = tuple(field)
+        self.scale = 1.0
+        self.offset = (0.0, 0.0)
+        with self.canvas.before:
+            PushMatrix()
+            self._translate = Translate()
+            self._scale = Scale()
+        with self.canvas:
+            Color(1, 1, 1, 0.3)
+            self._outline = Line(width=1)
+        with self.canvas.after:
+            PopMatrix()
+        Window.bind(size=self._fit)
+        self._fit()
+
+    def set_field(self, field):
+        field = tuple(field)
+        if field != self.field:
+            self.field = field
+            self._fit()
+
+    def _fit(self, *args):
+        width, height = Window.size
+        w, h = (max(1, v) for v in self.field)
+        s = min(width / w, height / h)
+        self.scale = s
+        self.offset = ((width - w * s) / 2, (height - h * s) / 2)
+        self._translate.xy = self.offset
+        self._scale.xyz = (s, s, 1)
+        self._outline.width = max(1.0, dp(1)) / s
+        self._outline.rectangle = (0, 0, w, h)
+
+    def to_screen(self, x, y):
+        return (self.offset[0] + self.scale * x,
+                self.offset[1] + self.scale * y)
+
+    def detach(self):
+        Window.unbind(size=self._fit)
+
+
+class RemoteShip:
+    """What a client's ControlsManager drives instead of a ship: the
+    control state of one player, sent to the host when it changes."""
+
+    def __init__(self, slot, net):
+        self.slot = slot
+        self.net = net
+        self.thrust = False
+        self._level = 1.0
+        self.turn = 0
+        self._sent = (0.0, 0)
+
+    @property
+    def thrust_level(self):
+        return self._level
+
+    @thrust_level.setter
+    def thrust_level(self, level):
+        self._level = level
+        self._sync()
+
+    def thrust_on(self):
+        self.thrust = True
+        self._sync()
+
+    def thrust_off(self):
+        self.thrust = False
+        self._sync()
+
+    def turn_left(self):
+        self.turn = -1
+        self._sync()
+
+    def turn_right(self):
+        self.turn = 1
+        self._sync()
+
+    def stop_rotation(self):
+        self.turn = 0
+        self._sync()
+
+    def shot(self):
+        self.net.send({'t': 'fire', 'slot': self.slot})
+
+    def _sync(self):
+        state = (round(min(max(self._level, 0.0), 1.0), 3)
+                 if self.thrust else 0.0, self.turn)
+        if state != self._sent:
+            self._sent = state
+            self.net.send({'t': 'ctl', 'slot': self.slot,
+                           'thrust': state[0], 'turn': state[1]})
+
+
+class JoinPrompt(Widget):
+    """Watching a network game: how to join, and "Tap to join" strips at
+    the free touch seats of this device."""
+    FULL_TIME = 2.0
+
+    def __init__(self, seats, on_touch_join, **kwargs):
+        super().__init__(**kwargs)
+        self.label = Label(font_size='18dp', halign='center',
+                           size_hint=(None, None))
+        self.label.bind(texture_size=self._layout)
+        self.add_widget(self.label)
+        self.strips = {}
+        for side in seats:
+            strip = SideJoinButton(side=side, text='Tap to join',
+                                   size_hint=(None, None))
+            strip.bind(on_press=lambda b: on_touch_join(b.side))
+            self.strips[side] = strip
+            self.add_widget(strip)
+        self.visible = False
+        self._full_until = 0
+        self.show(False)
+        Window.bind(size=self._layout)
+        self._layout()
+
+    def _layout(self, *args):
+        width, height = Window.size
+        across = dp(64)
+        for side, strip in self.strips.items():
+            if side in ('left', 'right'):
+                strip.size = (across, height / 2)
+                strip.pos = (0 if side == 'left' else width - across,
+                             height / 4)
+            else:
+                strip.size = (width / 2, across)
+                strip.pos = (width / 4,
+                             0 if side == 'bottom' else height - across)
+        self.label.size = self.label.texture_size
+        self.label.center = (width / 2, height * 0.3)
+
+    def show(self, visible, free=0, touch=False, taken=()):
+        self.visible = visible
+        if Clock.get_time() < self._full_until:
+            text = 'The game is full'
+        elif free:
+            text = 'Press FIRE to join · {} slot{} free'.format(
+                free, '' if free == 1 else 's')
+        else:
+            text = 'The game is full'
+        self.label.text = text
+        self.label.opacity = 1 if visible else 0
+        for side, strip in self.strips.items():
+            on = visible and touch and free > 0 and side not in taken
+            strip.opacity = 1 if on else 0
+            strip.disabled = not on
+
+    def full(self):
+        self._full_until = Clock.get_time() + self.FULL_TIME
+
+    def detach(self):
+        Window.unbind(size=self._layout)
+
+
+class NetHost:
+    """Hosting a network game: the session with the clients, the
+    announcement, and the lobby kept for the whole session."""
+    role = 'host'
+
+    def __init__(self, game, session, announcer, address):
+        self.game = game
+        self.session = session
+        self.announcer = announcer
+        self.address = address
+        self.name = session.name
+        self.lobby = Lobby(game.ship_colors)
+        self.lobby.names[0] = self.name
+        self.phase = 'lobby'
+        self.game_id = None
+        self.results = []
+        self.saved = {}          # game id -> machine that saved its score
+        self.booms = []          # explosions since the last snapshot
+        self.closed = False
+        self.event = Clock.schedule_interval(self.poll, NET_POLL)
+
+    @property
+    def info(self):
+        return 'Hosting on {}:{}'.format(self.address, self.session.port)
+
+    def set_phase(self, phase):
+        self.phase = self.session.phase = phase
+        self.lobby.in_game = phase == 'game'
+
+    def send(self, message):
+        if not self.closed:
+            self.session.broadcast(message)
+
+    # ---- network events --------------------------------------------------
+
+    def poll(self, dt=0):
+        if self.closed:
+            return
+        for event in self.session.poll():
+            if event[0] == 'connect':
+                self._connected(event[1], event[2])
+            elif event[0] == 'close':
+                self.drop(event[1])
+            else:
+                self._message(event[1], event[2])
+            if self.closed:
+                return
+        self.announcer.tick(len(self.lobby.joined), self.phase == 'game')
+
+    def _connected(self, peer, name):
+        self.lobby.names[peer] = name.strip() or 'Device {}'.format(peer)
+        self.session.send(peer, self.lobby_message())
+        if self.phase == 'game':
+            self.session.send(peer, self.start_message())
+            if self.game.paused:
+                self.session.send(peer, {'t': 'pause'})
+        elif self.phase == 'results':
+            self.session.send(peer, self.over_message())
+            if self.game_id in self.saved:
+                self.session.send(peer, {'t': 'saved', 'game': self.game_id,
+                                         'by': self.saved[self.game_id]})
+
+    def _message(self, peer, message):
+        kind = message['t']
+        game = self.game
+        if kind == 'bye':
+            self.session.disconnect(peer)
+            self.drop(peer)
+        elif kind == 'lb':
+            game.leaderboard.merge(message['entries'])
+            self.send(self.lb_message())
+        elif kind == 'act':
+            self.device_action(('net', peer, message['device']),
+                               message['action'])
+        elif kind == 'touch':
+            self.touch(peer, message)
+        elif kind in ('ctl', 'fire'):
+            game.net_control(peer, message)
+        elif kind == 'pause':
+            if self.phase == 'game':
+                game.pause()
+        elif kind == 'resume':
+            if self.phase == 'game':
+                game.resume()
+        elif kind == 'save':
+            self.save(message['game'], message['name'],
+                      self.lobby.names.get(peer, ''))
+        # the other types only go from the host to the clients
+
+    def join_screen(self):
+        game = self.game
+        if game.select_active and isinstance(game.select, JoinScreen):
+            return game.select
+        return None
+
+    def device_action(self, device, action):
+        """A press of a client's device."""
+        if self.phase == 'lobby':
+            select = self.join_screen()
+            if select is not None:
+                select.handle(device, action)
+        elif self.phase == 'game' and action == 'fire':
+            self.game.net_join(device)
+
+    def touch(self, peer, message):
+        """A client's touch strip (join) or panel button."""
+        side, slot, button = message['side'], message['slot'], message['button']
+        if side is not None:
+            device = ('net', peer, ('touch', side))
+            if self.phase == 'lobby':
+                select = self.join_screen()
+                if select is not None:
+                    slot = select.join(device)
+                    if slot is not None:
+                        select.flash(slot)
+            elif self.phase == 'game':
+                self.game.net_join(device)
+            return
+        select = self.join_screen()
+        if (self.phase != 'lobby' or select is None or slot is None
+                or button is None or slot not in self.lobby.peer_slots(peer)):
+            return
+        select.flash(slot)
+        if button in ('prev', 'next'):
+            select.change(slot, -1 if button == 'prev' else 1)
+        elif button == 'ready':
+            select.toggle_ready(slot)
+        else:
+            select.leave(slot)
+
+    def drop(self, peer):
+        """A client left, or its connection closed."""
+        slots = self.lobby.peer_slots(peer)
+        if self.phase == 'game':
+            for slot in slots:
+                self.game.remove_player(slot)
+        else:
+            for slot in slots:
+                self.lobby.leave(slot)
+            select = self.join_screen()
+            if select is not None:
+                select.refresh()
+                select._maybe_start()
+        self.lobby.names.pop(peer, None)
+        self.send_lobby()
+
+    # ---- messages ----------------------------------------------------------
+
+    def lobby_message(self):
+        lobby = self.lobby
+        slots = []
+        for slot, device in enumerate(lobby.slots):
+            if device is None:
+                slots.append(None)
+                continue
+            peer, own = ((device[1], device[2]) if is_remote(device)
+                         else (0, device))
+            slots.append([peer, own, lobby.state(slot),
+                          lobby.names.get(peer, '')])
+        select = self.join_screen()
+        return {'t': 'lobby', 'slots': slots,
+                'colors': list(lobby.ship_colors.colors),
+                'flash': list(select.flashing) if select else
+                [False] * MAX_PLAYERS,
+                'name': self.name, 'free': lobby.free, 'phase': self.phase}
+
+    def send_lobby(self):
+        self.send(self.lobby_message())
+
+    def start_message(self):
+        lobby = self.lobby_message()
+        return {'t': 'start', 'slots': lobby['slots'],
+                'colors': lobby['colors'], 'field': list(Window.size),
+                'elapsed': self.game.elapsed}
+
+    def over_message(self):
+        return {'t': 'over', 'game': self.game_id, 'results': [
+            [r.slot, r.color, int(r.points), round(max(r.survived, 0), 2)]
+            for r in self.results]}
+
+    def lb_message(self):
+        return {'t': 'lb', 'entries': [
+            [e['id'], e['name'], e['points'], e['seconds']]
+            for e in self.game.leaderboard.entries]}
+
+    # ---- the game ------------------------------------------------------------
+
+    def start_game(self):
+        """Everybody on the join screen is ready (or Play again)."""
+        lobby = self.lobby
+        self.game.ship_colors.save()
+        for slot in range(MAX_PLAYERS):
+            lobby.ready[slot] = lobby.out[slot] = False
+        self.set_phase('game')
+        self.booms = []
+        self.game.game_start(slots=lobby.slots)
+        self.send(self.start_message())
+        self.send_lobby()
+
+    def after_frame(self):
+        """The world after a frame, to every client (the newest only)."""
+        booms, self.booms = self.booms, []
+        if self.phase != 'game' or self.closed or not self.session.clients:
+            return
+        game = self.game
+        self.session.snapshot({
+            't': 'snap', 'field': list(Window.size),
+            'elapsed': round(game.elapsed, 2),
+            'ships': [[ship.slot, round(ship.x, 1), round(ship.y, 1),
+                       round(ship.angle % 360, 1),
+                       round(min(ship.thrust_level, 1), 3) if ship.thrust
+                       else 0, max(int(ship.lives), 0), int(ship.points)]
+                      for ship in game.spaceships],
+            'ast': [[a.net_id, round(a.x, 1), round(a.y, 1),
+                     round(a.angle % 360, 1)] for a in game.asteroids],
+            'shots': [[s.net_id, round(s.x, 1), round(s.y, 1)]
+                      for s in game.shots],
+            'boom': [[round(x, 1), round(y, 1)] for x, y in booms],
+        })
+
+    def paused(self, paused):
+        self.send({'t': 'pause' if paused else 'resume'})
+
+    def game_over(self, results):
+        self.results = list(results)
+        self.game_id = uuid.uuid4().hex[:12]
+        self.set_phase('results')
+        self.send(self.over_message())
+        self.send_lobby()
+
+    def play_again(self):
+        """Again with the players still here, or back to the join screen
+        when fewer than two are left."""
+        lobby = self.lobby
+        for slot in range(MAX_PLAYERS):
+            lobby.ready[slot] = lobby.out[slot] = False
+        if len(lobby.joined) >= 2:
+            self.start_game()
+        else:
+            self.set_phase('lobby')
+            self.game.show_host_join()
+            self.send_lobby()
+
+    def save_score(self, name):
+        """The host's own "Save to leaderboard"."""
+        board = self.game.leaderboard
+        board.last_name = clean_name(name)
+        board.save()
+        self.save(self.game_id, name, self.name)
+
+    def save(self, game_id, name, by):
+        """Store the game's top player once, on every device."""
+        if game_id != self.game_id or self.phase != 'results':
+            return
+        if game_id not in self.saved:
+            best = top_result(self.results)
+            entry = Leaderboard.new_entry(best.points, best.survived, name)
+            self.game.leaderboard.merge([entry])
+            self.saved[game_id] = by
+            self.send(self.lb_message())
+            self.game.score_saved(game_id, by)
+        self.send({'t': 'saved', 'game': game_id, 'by': self.saved[game_id]})
+
+    def close(self):
+        if not self.closed:
+            self.closed = True
+            self.event.cancel()
+            self.session.close('host-ended')
+            self.announcer.close()
+
+
+class NetClient:
+    """Playing in a game hosted by another machine: the session with the
+    host and the host's lobby, seen from here (this machine's devices are
+    plain devices, the others ('net', peer, device))."""
+    role = 'client'
+
+    def __init__(self, game, session, label):
+        self.game = game
+        self.session = session
+        self.host_name = label
+        self.peer = None
+        self.phase = None
+        self.colors = ShipColors()   # the host's colours, never saved here
+        self.lobby = Lobby(self.colors)
+        self.flash = [False] * MAX_PLAYERS
+        self.game_id = None
+        self.snap = None             # the newest snapshot not yet shown
+        self.closed = False
+        self.event = Clock.schedule_interval(self.poll, NET_POLL)
+
+    @property
+    def info(self):
+        return 'Game hosted by {}'.format(self.host_name)
+
+    def send(self, message):
+        if not self.closed:
+            self.session.send(message)
+
+    def poll(self, dt=0):
+        if self.closed:
+            return
+        for event in self.session.poll():
+            if event[0] == 'welcome':
+                self._welcome(event[1])
+            elif event[0] == 'fail':
+                self._stop()
+                self.game.net_failed(event[1])
+                return
+            elif event[0] == 'close':
+                self._lost('Connection to the host lost')
+                return
+            else:
+                self._message(event[1])
+            if self.closed:
+                return
+        if self.snap is not None and self.phase == 'game':
+            snap, self.snap = self.snap, None
+            self.game.client_snap(snap)
+
+    def _welcome(self, message):
+        self.peer = message['peer']
+        self.host_name = message['name']
+        self.phase = message['phase']
+        self.send({'t': 'lb', 'entries': [
+            [e['id'], e['name'], e['points'], e['seconds']]
+            for e in self.game.leaderboard.entries]})
+        if self.phase == 'game':
+            self.game.net_waiting('Joining the game…')
+        else:
+            self.game.show_client_join()
+
+    def _message(self, message):
+        kind = message['t']
+        game = self.game
+        if kind == 'lobby':
+            self._lobby(message)
+        elif kind == 'start':
+            self.phase = 'game'
+            self.lobby.in_game = True
+            self.snap = None
+            game.client_start(message)
+        elif kind == 'snap':
+            self.snap = message
+        elif kind == 'denied':
+            game.net_denied(message['device'], message['reason'])
+        elif kind == 'pause':
+            if self.phase == 'game':
+                game.pause(from_net=True)
+        elif kind == 'resume':
+            if self.phase == 'game':
+                game.net_resume()
+        elif kind == 'over':
+            self.phase = 'results'
+            self.lobby.in_game = False
+            self.game_id = message['game']
+            game.client_over(message)
+        elif kind == 'lb':
+            game.leaderboard.merge(message['entries'])
+        elif kind == 'saved':
+            if message['game'] == self.game_id:
+                game.score_saved(message['game'], message['by'])
+        elif kind == 'bye':
+            self._lost('The host ended the game')
+
+    def _lobby(self, message):
+        lobby = self.lobby
+        lobby.names = {}
+        for slot, entry in enumerate(message['slots']):
+            if entry is None:
+                lobby.slots[slot] = None
+                lobby.ready[slot] = lobby.out[slot] = False
+                continue
+            peer, device, state, name = entry
+            lobby.names[peer] = name
+            lobby.slots[slot] = (device if peer == self.peer
+                                 else ('net', peer, device))
+            lobby.ready[slot] = state == 'ready'
+            lobby.out[slot] = state == 'out'
+        self.colors.colors = [c if c in CABIN_COLORS else 'blue'
+                              for c in message['colors']]
+        self.flash = list(message['flash'])
+        self.host_name = message['name']
+        before, self.phase = self.phase, message['phase']
+        lobby.in_game = self.phase == 'game'
+        self.game.client_lobby(before)
+
+    # ---- what this machine's players do -------------------------------------
+
+    def act(self, device, action):
+        self.send({'t': 'act', 'device': device, 'action': action})
+
+    def touch(self, side=None, slot=None, button=None):
+        self.send({'t': 'touch', 'side': side, 'slot': slot,
+                   'button': button})
+
+    def paused(self, paused):
+        self.send({'t': 'pause' if paused else 'resume'})
+
+    def save_score(self, name):
+        board = self.game.leaderboard
+        board.last_name = clean_name(name)
+        board.save()
+        self.send({'t': 'save', 'game': self.game_id or '',
+                   'name': clean_name(name)})
+
+    def _stop(self):
+        self.closed = True
+        self.event.cancel()
+
+    def _lost(self, message):
+        self.close()
+        self.game.net_lost(message)
+
+    def close(self):
+        if not self.closed:
+            self._stop()
+            self.session.close('menu')
 
 
 class AnimatedBackground(Widget):
@@ -2688,6 +3761,15 @@ class SpacePilgrimGame(Widget):
         self.num_players = 1
         self.controls = []   # one ControlsManager per slot, None if empty/out
         self.slots = None    # multiplayer: slot -> device; None: one player
+        self.joined_at = {}  # slot -> elapsed time when the player joined
+        self._layout = (False, False)   # edges, free_corners of this game
+        # network game: NetHost or NetClient while hosting or joined
+        self.net = None
+        self.in_net_game = False
+        self.mirror_ships, self.mirror_asteroids, self.mirror_shots = {}, {}, {}
+        self.network_settings = NetworkSettings(
+            os.path.join(app.user_data_dir, 'network.json') if app else None)
+        self.multicast = MulticastLock()
         self.pad_watch = watch_gamepads()
         Window.bind(
             on_key_down=self._on_key_down,
@@ -2732,43 +3814,92 @@ class SpacePilgrimGame(Widget):
         entries = ([(0, None)] if slots is None
                    else [(i, d) for i, d in enumerate(slots) if d])
         self.num_players = len(entries)
-        # a player at the top or bottom edge: a seat at every edge, and the
-        # keyboard and gamepad players' lives and points in the corners
-        edges = any(device_kind(d) == 'touch' and d[1] in ('top', 'bottom')
-                    for _, d in entries)
-        free_corners = edges and any(device_kind(d) != 'touch'
-                                     for _, d in entries)
+        self._layout = self._seat_layout(device for _, device in entries)
+        if self._hosting:
+            # the lobby's own list: players join and leave during the game
+            self.slots = self.net.lobby.slots
+            self.in_net_game = True
 
         self.statuses = []
         self.controls = [None] * (len(slots) if slots is not None else 1)
+        self.joined_at = {}
         for slot, device in entries:
-            kind = device_kind(device)
-            touch_side = device[1] if kind == 'touch' else ''
-            spaceship = self.add_spaceship(
-                slot, 1 if slots is None else MAX_PLAYERS, colors[slot])
-            if slots is None:
-                side = ''
-            else:
-                side = touch_side or ('corner' if edges else 'row')
-            status = SpaceshipStatus(
-                spaceship=spaceship, side=side, column=slot,
-                color=(*cabin_rgb(colors[slot]), 1))
-            self.add_widget(status)
-            self.statuses.append(status)
-            touch = ('auto' if slots is None
-                     else 'on' if kind == 'touch' else 'off')
-            controls = ControlsManager(
-                spaceship=spaceship, side=touch_side, touch=touch,
-                edges=edges, free_corners=free_corners)
-            controls.touch_buttons.set_scale(self.touch_settings.scale)
-            if touch_side:
-                status.follow(controls.touch_buttons)
-            self.add_widget(controls)
-            self.controls[slot] = controls
+            self.add_player(slot, device, colors[slot])
+            self.joined_at[slot] = 0.0
         self.spaceship_status = self.statuses[0]
         self.spaceship_controls = next(c for c in self.controls if c)
         self._show_touch_controls()
         self._inputs_down.clear()
+        self.update_prompt()
+
+    @staticmethod
+    def _seat_layout(devices):
+        """(edges, free_corners): a touch player of this screen at the top
+        or bottom edge means a seat at every edge, and the keyboard,
+        gamepad and remote players' lives and points in the corners."""
+        seats = [touch_seat(d) for d in devices]
+        edges = any(seat in ('top', 'bottom') for seat in seats)
+        return edges, edges and any(not seat for seat in seats)
+
+    def add_player(self, slot, device, color, ship=None, place=False):
+        """The ship, lives and points block and controls of one player.
+        A network client brings the mirror `ship` it draws and gets controls
+        only for its own players; `place` keeps a ship that joins a running
+        game away from the asteroids."""
+        edges, free_corners = self._layout
+        seat = touch_seat(device)
+        if seat in ('top', 'bottom') and not edges:
+            edges = True        # joined during the game at a new edge
+        if ship is None:
+            ship = self.add_spaceship(
+                slot, 1 if self.slots is None else MAX_PLAYERS, color)
+            if place:
+                self._place_safely(ship)
+        ship.slot = slot
+        if self.slots is None:
+            side = ''
+        else:
+            side = seat or ('corner' if edges else 'row')
+        status = SpaceshipStatus(spaceship=ship, side=side, column=slot,
+                                 color=(*cabin_rgb(color), 1))
+        self.add_widget(status)
+        self.statuses.append(status)
+        controls = None
+        if not self._joined_client or not is_remote(device):
+            touch = ('auto' if self.slots is None
+                     else 'on' if seat else 'off')
+            target = (RemoteShip(slot, self.net) if self._joined_client
+                      else ship)
+            controls = ControlsManager(
+                spaceship=target, side=seat, touch=touch, edges=edges,
+                free_corners=free_corners)
+            controls.touch_buttons.set_scale(self.touch_settings.scale)
+            if seat:
+                status.follow(controls.touch_buttons)
+            self.add_widget(controls)
+        while len(self.controls) <= slot:
+            self.controls.append(None)
+        self.controls[slot] = controls
+        return ship
+
+    SAFE_DISTANCE = 200   # px from a late ship to every asteroid
+
+    def _place_safely(self, ship):
+        """Move a ship that joins a running game from its start position to
+        the nearest point (on rings around it) far enough from every
+        asteroid, if there is one on the field."""
+        start = Vector(*ship.pos)
+        width, height = Window.size
+        step = 50
+        for radius in range(0, int(max(width, height)) + step, step):
+            for angle in (range(0, 360, 45) if radius else (0,)):
+                point = start + Vector(radius, 0).rotate(angle)
+                if not (0 <= point.x <= width and 0 <= point.y <= height):
+                    continue
+                if all(point.distance(a.pos) >= self.SAFE_DISTANCE
+                       for a in self.asteroids):
+                    ship.pos = tuple(point)
+                    return
 
     # ---- input routing -------------------------------------------------
 
@@ -2795,7 +3926,7 @@ class SpacePilgrimGame(Widget):
         players never; in single player the touch setting decides."""
         if self.paused:
             return
-        for controls in self.controls:
+        for slot, controls in enumerate(self.controls):
             if controls is not None:
                 visible = (self.touch_ui if controls.touch == 'auto'
                            else controls.touch == 'on')
@@ -2803,7 +3934,7 @@ class SpacePilgrimGame(Widget):
                 # touch play has no Back key: the player's status block
                 # offers the pause screen, which leads back to the menu
                 for status in self.statuses:
-                    if status.spaceship is controls.spaceship:
+                    if status.column == slot:
                         status.show_menu = visible
 
     def _on_window_touch(self, window, touch):
@@ -2812,6 +3943,7 @@ class SpacePilgrimGame(Widget):
             self.has_touch = True
             if self.select_active and isinstance(self.select, JoinScreen):
                 self.select.allow_touch()
+            self.update_prompt()
 
     def _input(self, source, action, pressed, device=None):
         """Send a press/release of `action` coming from `source` (a hashable
@@ -2822,7 +3954,12 @@ class SpacePilgrimGame(Widget):
         if in_game and action != 'back':
             controls = self._controls_of(device)
             if controls is None:
-                return    # a device that did not join this game
+                # a device that did not join this game; in a network game
+                # FIRE takes a free slot
+                if (pressed and action == 'fire' and self.in_net_game
+                        and device is not None):
+                    self.net_join(device)
+                return
 
         if pressed:
             if source in self._inputs_down:
@@ -2850,6 +3987,18 @@ class SpacePilgrimGame(Widget):
                     self.leave_cancel()
                 else:
                     self.resume()
+        elif self.network_active:
+            if not pressed:
+                return
+            screen = self.network_screen
+            if action == 'up':
+                screen.move(-1)
+            elif action == 'down':
+                screen.move(1)
+            elif action == 'fire':
+                screen.activate()
+            elif action == 'back':
+                self.close_network()
         elif self.settings_active:
             if not pressed or self.settings.waiting:
                 return
@@ -2919,6 +4068,7 @@ class SpacePilgrimGame(Widget):
         return not (self.settings_active or self.menu_active
                     or self.select_active or self.results_active
                     or self.leaderboard_active or self.name_active
+                    or self.network_active or self.address_active
                     or self.paused or hasattr(self, 'confirm_screen'))
 
     def _controls_of(self, device):
@@ -2957,6 +4107,24 @@ class SpacePilgrimGame(Widget):
     @property
     def settings_active(self):
         return hasattr(self, 'settings') and self.settings in self.children
+
+    @property
+    def network_active(self):
+        return (hasattr(self, 'network_screen')
+                and self.network_screen in self.children)
+
+    @property
+    def address_active(self):
+        return (hasattr(self, 'address_screen')
+                and self.address_screen in self.children)
+
+    @property
+    def _hosting(self):
+        return self.net is not None and self.net.role == 'host'
+
+    @property
+    def _joined_client(self):
+        return self.net is not None and self.net.role == 'client'
 
     def _show_settings_page(self, page):
         if self.settings_active:
@@ -2998,10 +4166,18 @@ class SpacePilgrimGame(Widget):
         self.game_start(1)
 
     def start_joined(self):
+        if self._hosting:
+            self.net.start_game()
+            return
         self.ship_colors.save()
         self.game_start(slots=self.select.slots)
 
     def close_ship_select(self):
+        if self.net is not None:      # leaves (or ends) the network game
+            self.remove_widget(self.select)
+            del self.select
+            self.show_menu()
+            return
         self.remove_widget(self.select)
         del self.select
         self.add_widget(self.menu)
@@ -3019,12 +4195,14 @@ class SpacePilgrimGame(Widget):
             self._inputs_down.add(('key', key))
             self.settings.handle_key(key, scancode)
             return
-        if self.name_active:
-            # typing a nickname: only Escape (cancel) and Enter (in the
-            # field) mean something, the game keys must not move the menu
+        if self.name_active or self.address_active:
+            # typing a nickname or address: only Escape (cancel) and Enter
+            # (in the field) mean something, the game keys must not move
+            # the menu
             self._back_from_menu = False
             if key == 27:
-                self.name_screen.cancel()
+                (self.name_screen if self.name_active
+                 else self.address_screen).cancel()
             return
         # Kivy dispatches on_keyboard right after this handler, by which time
         # Back may already have closed the game or settings; remember where
@@ -3159,20 +4337,431 @@ class SpacePilgrimGame(Widget):
         if action:
             self._joy_input(stick, ('button', stick, button), action, False)
 
+    # ---- network game ------------------------------------------------------
+
+    def show_network(self, message=''):
+        """The network screen: host, join a found game or give an address."""
+        if self.menu_active:
+            self.remove_widget(self.menu)
+        self._drop_network_screen()
+        self.multicast.acquire()
+        try:
+            browser = make_browser()
+        except OSError as e:
+            Logger.warning('SpacePilgrim: no game search: %s', e)
+            browser = None
+        self.network_screen = NetworkScreen(browser, message=message)
+        self.add_widget(self.network_screen)
+
+    def _drop_network_screen(self):
+        if hasattr(self, 'network_screen'):
+            self.network_screen.close()
+            self.remove_widget(self.network_screen)
+            del self.network_screen
+        self.multicast.release()
+
+    def close_network(self):
+        self.show_menu()
+
+    def host_game(self):
+        """"Host a game": the join screen, open to the network."""
+        if self.net is not None:
+            return
+        name = device_name()
+        session = None
+        try:
+            session = make_host_session(name)
+            announcer = make_announcer(name, session.port)
+        except OSError as e:
+            if session is not None:
+                session.close()
+            self.network_screen.set_message(
+                'Could not host a game: {}'.format(e.strerror or e))
+            return
+        self._drop_network_screen()
+        self.net = NetHost(self, session, announcer, network.local_address())
+        self.show_host_join()
+
+    def show_host_join(self):
+        self._drop_screens()
+        self.select = JoinScreen(
+            self.ship_colors, self.bindings, touch=self.has_touch,
+            seats=touch_seats(), lobby=self.net.lobby, net=self.net)
+        self.select.info.text = self.net.info
+        self.select.on_change = self.net.send_lobby
+        self.add_widget(self.select)
+        self.net.send_lobby()
+
+    def show_address(self):
+        self.remove_widget(self.network_screen)
+        self.address_screen = AddressScreen(
+            self.network_settings.default_address())
+        self.add_widget(self.address_screen)
+
+    def address_done(self, text):
+        """The typed address (None: Back) and back to the network screen."""
+        self.remove_widget(self.address_screen)
+        del self.address_screen
+        self.add_widget(self.network_screen)
+        if text is None:
+            return
+        text = text.strip()
+        try:
+            host, port = network.parse_address(text)
+        except ValueError:
+            self.network_screen.set_message(
+                'Not an address: {}'.format(text[:40]))
+            return
+        self.network_settings.last_address = text
+        self.network_settings.save()
+        self.join_game(host, port, text)
+
+    def join_game(self, host, port, label):
+        """Connect to a host; the network screen says how it goes."""
+        if self.net is not None:
+            return
+        try:
+            session = make_client_session(host, port, device_name())
+        except OSError:
+            self.net_failed('unreachable')
+            return
+        self.net = NetClient(self, session, label)
+        self.net_waiting('Connecting to {}…'.format(label))
+
+    def net_waiting(self, text):
+        if self.network_active:
+            self.network_screen.set_message(text)
+
+    NET_FAILURES = {
+        'version': 'The game versions differ',
+        'full': 'The game is full',
+    }
+
+    def net_failed(self, reason):
+        """A connection could not be set up."""
+        self.net = None
+        text = self.NET_FAILURES.get(
+            reason, 'Could not reach the host (same Wi-Fi? firewall?)')
+        if self.network_active:
+            self.network_screen.set_message(text)
+        else:
+            self._drop_screens()
+            if self.menu_active:
+                self.remove_widget(self.menu)
+            self.show_network(text)
+
+    def net_end(self):
+        """Leave the network game, if any (the host ends it for everyone)."""
+        net, self.net = self.net, None
+        if net is not None:
+            net.close()
+
+    def net_lost(self, message):
+        """The host ended the game or the connection to it closed."""
+        self.net = None
+        self.end_game()
+        self.show_menu(message)
+
+    def show_client_join(self):
+        """The host's join screen, as seen from this machine."""
+        self.end_game()
+        self._drop_screens()
+        if self.menu_active:
+            self.remove_widget(self.menu)
+        net = self.net
+        self.select = JoinScreen(
+            net.colors, self.bindings, touch=self.has_touch,
+            seats=touch_seats(), lobby=net.lobby, net=net)
+        self.select.flashing = list(net.flash)
+        self.add_widget(self.select)
+        self._client_join_info()
+
+    def _client_join_info(self):
+        net = self.net
+        self.select.info.text = net.info + (
+            ' · waiting for the next game' if net.phase == 'results' else '')
+        self.select.refresh()
+
+    def client_lobby(self, before):
+        """A client got the host's lobby."""
+        net = self.net
+        if self.select_active and isinstance(self.select, JoinScreen):
+            self.select.flashing = list(net.flash)
+            self._client_join_info()
+        elif net.phase == 'lobby' and before != 'lobby' and not self.in_net_game:
+            self.show_client_join()     # the host went back to its join screen
+        if self.in_net_game:
+            self._sync_mirror_players()
+            self.update_prompt()
+
+    # ---- joining and leaving a running network game --------------------------
+
+    def net_join(self, device):
+        """A device that has not joined pressed FIRE during a network game."""
+        if self._joined_client:
+            if device[0] == 'touch':
+                self.net.touch(side=device[1])
+            else:
+                self.net.act(device, 'fire')
+            return
+        if not self._hosting or self.net.phase != 'game':
+            return
+        lobby = self.net.lobby
+        slot = lobby.slot_of(device)
+        if slot is not None:
+            if lobby.out[slot]:
+                self._deny(device, 'out')
+            return
+        slot = lobby.join(device)
+        if slot is None:
+            self._deny(device, 'full')
+            return
+        self.add_player(slot, device, lobby.ship_colors.colors[slot],
+                        place=True)
+        self.joined_at[slot] = self.elapsed
+        self.num_players = len(self.spaceships)
+        self._show_touch_controls()
+        self.net.send_lobby()
+        self.update_prompt()
+
+    def _deny(self, device, reason):
+        if is_remote(device):
+            self.net.session.send(device[1], {
+                't': 'denied', 'device': device[2], 'reason': reason})
+        else:
+            self.net_denied(device, reason)
+
+    def net_denied(self, device, reason):
+        if reason == 'full' and getattr(self, 'prompt', None) is not None:
+            self.prompt.full()
+            self.update_prompt()
+
+    def remove_player(self, slot):
+        """The host: the machine of the player in `slot` left the game. The
+        ship leaves the field (its result is kept) and the slot is free."""
+        controls = self.controls[slot] if slot < len(self.controls) else None
+        ship = next((s for s in self.spaceships
+                     if getattr(s, 'slot', None) == slot), None)
+        if controls is not None:
+            controls.show_touch_buttons(False)
+            self.remove_widget(controls)
+            self.controls[slot] = None
+        for status in [st for st in self.statuses if st.column == slot]:
+            self.remove_widget(status)
+            self.statuses.remove(status)
+        if ship is not None:
+            self.results.append(PlayerResult(
+                slot, ship.cabin, ship.points,
+                self.elapsed - self.joined_at.get(slot, 0.0)))
+            self.remove_spaceship(ship)
+        self.net.lobby.leave(slot)
+        self.joined_at.pop(slot, None)
+        self.num_players = len(self.spaceships)
+        if self.in_net_game and not self.spaceships:
+            self.game_over()
+        else:
+            self.update_prompt()
+
+    def net_control(self, peer, message):
+        """The host: a client's player steers, thrusts or fires."""
+        slot = message['slot']
+        device = self.slots[slot] if self.in_net_game else None
+        controls = self.controls[slot] if slot < len(self.controls) else None
+        if (not is_remote(device) or device[1] != peer or controls is None
+                or self.paused):
+            return
+        ship = controls.spaceship
+        if message['t'] == 'fire':
+            ship.shot()
+            return
+        level = message['thrust']
+        if level > 0:
+            ship.thrust_level = level
+            if not ship.thrust:
+                ship.thrust_on()
+        elif ship.thrust:
+            ship.thrust_off()
+        turn = message['turn']
+        if turn < 0:
+            ship.turn_left()
+        elif turn > 0:
+            ship.turn_right()
+        else:
+            ship.stop_rotation()
+
+    def update_prompt(self):
+        """Show how to join while no device of this machine plays."""
+        prompt = getattr(self, 'prompt', None)
+        if not self.in_net_game or self.net is None:
+            return
+        if prompt is None:
+            self.prompt = prompt = JoinPrompt(
+                touch_seats(), lambda side: self.net_join(('touch', side)))
+            self.add_widget(prompt)
+        lobby = self.net.lobby
+        playing = any(d and not is_remote(d) and not lobby.out[i]
+                      for i, d in enumerate(lobby.slots))
+        prompt.show(not playing, free=lobby.free, touch=self.has_touch,
+                    taken={touch_seat(d) for d in lobby.slots})
+
+    # ---- a client's game: the host's world, drawn here ----------------------
+
+    def client_start(self, message):
+        """The host started a game (or this client came during one)."""
+        self.end_game()
+        self._drop_screens()
+        if self.menu_active:
+            self.remove_widget(self.menu)
+        if self.paused:
+            self._drop_confirm()
+            self.remove_widget(self.pause_screen)
+            del self.pause_screen
+            self._unfreeze()
+        net = self.net
+        self.slots = net.lobby.slots
+        self.in_net_game = True
+        self.elapsed = message['elapsed']
+        self.results = []
+        self.statuses = []
+        self.controls = [None] * MAX_PLAYERS
+        self.joined_at = {}
+        self._layout = self._seat_layout(self.slots)
+        self.field_view = FieldView(message['field'])
+        self.add_widget(self.field_view)
+        self._inputs_down.clear()
+        self.update_prompt()
+
+    def _mirror_device(self, slot):
+        return self.slots[slot] if self.slots is not None else None
+
+    def _drop_mirror_ship(self, slot):
+        """A ship left the host's field: lost (its block stays) or left."""
+        ship = self.mirror_ships.pop(slot)
+        out = self.net is not None and self.net.lobby.out[slot]
+        if out:
+            ship.lives = 0
+        for status in [st for st in self.statuses
+                       if st.spaceship is ship and not out]:
+            self.remove_widget(status)
+            self.statuses.remove(status)
+        controls = self.controls[slot]
+        if controls is not None:
+            controls.show_touch_buttons(False)
+            self.remove_widget(controls)
+            self.controls[slot] = None
+        self.remove_spaceship(ship)
+
+    def _sync_mirror_players(self):
+        """Ships whose slot changed hands are somebody else's now."""
+        for slot, ship in list(self.mirror_ships.items()):
+            if ship.device != self._mirror_device(slot):
+                self._drop_mirror_ship(slot)
+
+    def client_snap(self, message):
+        """Show the host's world as it is in a snapshot."""
+        view = getattr(self, 'field_view', None)
+        if view is None or not self.in_net_game:
+            return
+        view.set_field(message['field'])
+        self.elapsed = message['elapsed']
+        colors = self.net.colors.colors
+        seen = set()
+        for slot, x, y, angle, thrust, lives, points in message['ships']:
+            device = self._mirror_device(slot)
+            ship = self.mirror_ships.get(slot)
+            if ship is not None and ship.device != device:
+                self._drop_mirror_ship(slot)
+                ship = None
+            if ship is None:
+                if device is None:
+                    continue       # the lobby with this player is on its way
+                ship = Spaceship(cabin=colors[slot])
+                ship.device = device
+                view.add_widget(ship)
+                self.spaceships.append(ship)
+                self.mirror_ships[slot] = ship
+                for status in [st for st in self.statuses
+                               if st.column == slot]:
+                    self.remove_widget(status)   # a lost ship's old block
+                    self.statuses.remove(status)
+                self.add_player(slot, device, colors[slot], ship=ship)
+                self._show_touch_controls()
+            seen.add(slot)
+            ship.pos = (x, y)
+            ship.angle = angle
+            ship.lives = lives
+            ship.points = points
+            if thrust > 0:
+                ship.thrust_level = thrust
+            if (thrust > 0) != ship.thrust:
+                if thrust > 0:
+                    ship.thrust_on()
+                else:
+                    ship.thrust_off()
+        for slot in [s for s in self.mirror_ships if s not in seen]:
+            self._drop_mirror_ship(slot)
+        self._mirror(self.mirror_asteroids, message['ast'], Asteroid,
+                     lambda a, item: setattr(a, 'angle', item[3]))
+        self._mirror(self.mirror_shots, message['shots'], Shot)
+        for pos in message['boom']:
+            self.add_explosion(pos, parent=view)
+        self.update_prompt()
+
+    def _mirror(self, widgets, items, kind, extra=None):
+        """Create, move and remove the mirror widgets of asteroids or shots
+        by the host's ids."""
+        view = self.field_view
+        seen = set()
+        for item in items:
+            ident = item[0]
+            seen.add(ident)
+            widget = widgets.get(ident)
+            if widget is None:
+                widget = widgets[ident] = kind()   # a new shot plays its sound
+                view.add_widget(widget)
+            widget.pos = (item[1], item[2])
+            if extra is not None:
+                extra(widget, item)
+        for ident in [i for i in widgets if i not in seen]:
+            view.remove_widget(widgets.pop(ident))
+
+    def client_over(self, message):
+        """The host's game is over: its results, here too."""
+        results = [PlayerResult(*r) for r in message['results']]
+        self.end_game()
+        self._drop_screens()
+        self.results_screen = ResultsScreen(results, network='client')
+        self.add_widget(self.results_screen)
+
+    def score_saved(self, game_id, by):
+        """The network game's score is in every leaderboard now."""
+        screen = getattr(self, 'results_screen', None)
+        if screen is not None:
+            screen.mark_saved(by)
+
     def game_stop(self):
         """Leave the game (or whatever is shown) for the main menu."""
         self.end_game()
         self.show_menu()
 
-    def show_menu(self):
-        for name in ('results_screen', 'leaderboard_screen', 'name_screen'):
-            if hasattr(self, name):
-                self.remove_widget(getattr(self, name))
-                delattr(self, name)
+    def show_menu(self, message=''):
+        self.net_end()
+        self._drop_screens()
         if hasattr(self, 'menu'):
             self.remove_widget(self.menu)
         self.menu = Menu()
+        if 'message' in self.menu.ids:     # declared in spacepilgrim.kv
+            self.menu.ids.message.text = message
         self.add_widget(self.menu)
+
+    def _drop_screens(self):
+        """Remove the menus and screens shown over the field."""
+        self._drop_network_screen()
+        for name in ('results_screen', 'leaderboard_screen', 'name_screen',
+                     'address_screen', 'select'):
+            if hasattr(self, name):
+                self.remove_widget(getattr(self, name))
+                delattr(self, name)
 
     def show_name_entry(self):
         results = self.results_screen.results
@@ -3201,11 +4790,17 @@ class SpacePilgrimGame(Widget):
         """Every ship is lost: show how the players did."""
         results = sorted(self.results, key=lambda r: r.slot)
         self.end_game()
-        self.results_screen = ResultsScreen(results)
+        if self._hosting:
+            self.net.game_over(results)
+        self.results_screen = ResultsScreen(
+            results, network=self.net.role if self.net else None)
         self.add_widget(self.results_screen)
 
     def play_again(self):
-        self.game_start(*self.last_config)
+        if self._hosting:
+            self.net.play_again()
+        elif self.net is None:
+            self.game_start(*self.last_config)
 
     def expire_shot(self, shot):
         shot.expiry = Clock.schedule_interval(
@@ -3215,9 +4810,10 @@ class SpacePilgrimGame(Widget):
         return next((c for c in self.children
                      if isinstance(c, AnimatedBackground)), None)
 
-    def pause(self):
-        """Freeze the world and show the pause screen."""
-        if self.paused or not self.spaceships:
+    def pause(self, from_net=False):
+        """Freeze the world and show the pause screen. In a network game
+        every device pauses (`from_net`: the pause came from the network)."""
+        if self.paused or not (self.spaceships or self.in_net_game):
             return
         self.paused = True
         self.frame_schedule.cancel()
@@ -3243,6 +4839,8 @@ class SpacePilgrimGame(Widget):
         self._inputs_down.clear()
         self.pause_screen = PauseScreen()
         self.add_widget(self.pause_screen)
+        if self.net is not None and not from_net:
+            self.net.paused(True)
 
     def confirm_leave(self):
         """Ask before leaving a paused game for the main menu."""
@@ -3289,7 +4887,7 @@ class SpacePilgrimGame(Widget):
         if any(ship.thrust for ship in self.spaceships):
             Spaceship.sound.play()
 
-    def resume(self):
+    def resume(self, from_net=False):
         """Leave the pause screen: play on from the frozen state."""
         if not self.paused:
             return
@@ -3297,6 +4895,14 @@ class SpacePilgrimGame(Widget):
         del self.pause_screen
         self._unfreeze()
         self._show_touch_controls()
+        if self.net is not None and not from_net:
+            self.net.paused(False)
+
+    def net_resume(self):
+        """Another device continued the network game."""
+        if self.paused:
+            self._drop_confirm()
+            self.resume(from_net=True)
 
     def end_game(self):
         if self.paused:
@@ -3321,8 +4927,20 @@ class SpacePilgrimGame(Widget):
         self._inputs_down.clear()
         self.slots = None
         self.num_players = 1
+        self.in_net_game = False
+        for name in ('field_view', 'prompt'):
+            widget = getattr(self, name, None)
+            if widget is not None:
+                widget.detach()
+                self.remove_widget(widget)
+                delattr(self, name)
+        self.mirror_ships, self.mirror_asteroids, self.mirror_shots = {}, {}, {}
 
     def update(self, dt):
+        if self.net is not None:
+            self.net.poll()
+            if self._joined_client or self.net is None:
+                return    # a client draws what the host sends
         if self.spaceships:
             self.elapsed += dt
         [spaceship.update(dt) for spaceship in self.spaceships]
@@ -3349,6 +4967,8 @@ class SpacePilgrimGame(Widget):
 
                     self.add_explosion(asteroid.pos)
                     break
+        if self._hosting:
+            self.net.after_frame()
 
     def lose_spaceship(self, spaceship):
         """A ship ran out of lives: it leaves the field, its controls stop.
@@ -3363,7 +4983,12 @@ class SpacePilgrimGame(Widget):
                     if status.spaceship is spaceship:
                         status.show_menu = False
                 self.results.append(PlayerResult(
-                    player, spaceship.cabin, spaceship.points, self.elapsed))
+                    player, spaceship.cabin, spaceship.points,
+                    self.elapsed - self.joined_at.get(player, 0.0)))
+                if self._hosting:     # out until the game ends
+                    self.net.lobby.out[player] = True
+                    self.net.send_lobby()
+                    self.update_prompt()
         if len(self.spaceships) == 1:
             self.game_over()
         else:
@@ -3384,13 +5009,16 @@ class SpacePilgrimGame(Widget):
     def remove_spaceship(self, spaceship):
         spaceship.thrust_off()
         self.spaceships.remove(spaceship)
-        self.remove_widget(spaceship)
+        if spaceship.parent is not None:     # a client's is in the field view
+            spaceship.parent.remove_widget(spaceship)
 
-    def add_explosion(self, pos):
+    def add_explosion(self, pos, parent=None):
         explosion = Explosion()
         explosion.pos = pos
-        self.add_widget(explosion)
+        (parent or self).add_widget(explosion)
         self.explosions.append(explosion)
+        if self._hosting:
+            self.net.booms.append(tuple(pos))
 
     def remove_explosion(self, explosion):
         self.remove_widget(explosion)
@@ -3408,6 +5036,8 @@ class SpacePilgrimGame(Widget):
             self.shots.remove(shot)
 
     def generate_asteroid(self, dt):
+        if self._joined_client:
+            return     # the host's asteroids arrive in the snapshots
         # use left, bottom positions because asteroids can fly around screen
         positions = {
             'left':   Vector(0, randint(0, Window.size[1])),
