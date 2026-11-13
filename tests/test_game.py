@@ -1463,6 +1463,7 @@ def test_side_strips_are_at_the_screen_edges(kv_game):
     assert right.right > Window.width - main.dp(10)
     assert left.height == join.height
     middle = join.panels[0]['panel'].parent.parent  # panels + Back row
+    middle.parent.do_layout()
     assert left.right < middle.x and right.x > middle.right
 
 
@@ -1670,15 +1671,19 @@ def test_pause_button_follows_touch_controls(kv_game):
     assert button.opacity == 0 and button.disabled
 
 
-def test_single_player_pause_button_is_under_the_points(kv_game):
+def test_single_player_pause_button_is_between_the_controls(kv_game):
     game = kv_game
     game.game_start()
     game._on_window_touch(None, None)
     status = game.spaceship_status
     button = _pause_button(status)
-    label = status.children[-1]
-    assert button.center_x == label.center_x
-    assert button.top < label.center_y - label.texture_size[1] / 2
+    layout = game.controls[0].touch_buttons
+    stick, fire = layout.stick, layout.fire
+    # the middle of the bottom edge, on the bottom line of the controls
+    assert button.center_x == pytest.approx(
+        (stick.center_x + fire.center_x) / 2)
+    assert button.y == pytest.approx(stick.y) == pytest.approx(fire.y)
+    assert stick.right < button.x and button.right < fire.x
 
 
 def test_pause_button_pauses_and_main_menu_leaves(kv_game):
@@ -1692,16 +1697,26 @@ def test_pause_button_pauses_and_main_menu_leaves(kv_game):
     assert game.menu_active and not game.paused
 
 
-def test_touch_players_pause_buttons_are_mid_side_under_the_text(
+def test_touch_players_pause_buttons_are_between_their_controls(
         kv_game, start_game):
     game = start_game(slots=TOUCH2)
     left, right = game.statuses
-    for status, inner in ((left, 1), (right, -1)):
+    for status, controls, inner in ((left, game.controls[0], 1),
+                                    (right, game.controls[1], -1)):
         button = _pause_button(status)
         label = status.children[-1]
+        stick, fire = controls.touch_buttons.stick, controls.touch_buttons.fire
         assert button.opacity == 1 and not button.disabled
-        assert button.center_y == label.center_y == pytest.approx(
-            Window.height / 2)
+        # midway between joystick and FIRE along the side, its outer side
+        # on the joystick's outer side, the text further in
+        assert button.center_y == pytest.approx(
+            (stick.center_y + fire.center_y) / 2)
+        if inner == 1:
+            assert button.x == pytest.approx(stick.x)
+        else:
+            assert button.right == pytest.approx(stick.right)
+        low, high = sorted((stick, fire), key=lambda w: w.y)
+        assert low.top < button.y and button.top < high.y
         assert (button.center_x - label.center_x) * inner < 0
     _pause_button(left).dispatch('on_press')
     assert game.paused
@@ -2360,9 +2375,24 @@ def test_four_seats_measure_each_axis():
 
 
 def test_touch_seats_follow_the_screen(monkeypatch):
-    assert main.touch_seats() == ('left', 'right')
+    assert main.touch_seats((800, 360)) == ('left', 'right')
     monkeypatch.setattr(main, 'four_seat_screen', lambda *a: True)
     assert main.touch_seats() == ('left', 'right', 'top', 'bottom')
+
+
+@pytest.mark.parametrize('size, seats', [
+    ((800, 360), ('left', 'right')),
+    ((360, 800), ('top', 'bottom')),
+    ((600, 600), ('left', 'right')),     # square counts as wide
+])
+def test_touch_seats_at_the_short_edges(size, seats):
+    assert main.touch_seats(size) == seats
+
+
+@pytest.mark.parametrize('size', [(1280, 800), (800, 1280)])
+def test_touch_seats_four_on_a_big_screen_either_way(monkeypatch, size):
+    monkeypatch.setattr(main, 'four_seat_screen', lambda *a: True)
+    assert main.touch_seats(size) == main.FOUR_SEATS
 
 
 def test_screen_dpi_off_android_is_kivys():
@@ -2424,7 +2454,7 @@ def test_four_touch_sets_share_the_edges(touch4, scale, size, free_corners):
     for layout in layouts:
         layout.size = size
         layout.set_scale(scale)
-        layout.free_corners = free_corners   # a keyboard player is in a corner
+        layout.corners = [0, 1, 2, 3] if free_corners else []
     w, h = size
     margin = main.dp(main.MARGIN_DP)
     corner = main.dp(main.CORNER_DP)
@@ -2513,12 +2543,12 @@ def test_keyboard_player_keeps_a_corner_free(start_game):
     game = start_game(slots=[('touch', 'left'), ('touch', 'top'),
                              ('keys', 0), None])
     layout = game.controls[0].touch_buttons
-    assert layout.free_corners
+    assert layout.corners == [2]
     layout.size = (1920, 1080)
     corner = main.dp(main.CORNER_DP)
     assert layout.fire.y >= corner and layout.stick.top <= 1080 - corner
     touch4 = start_game(slots=TOUCH4)
-    assert not any(c.touch_buttons.free_corners for c in touch4.controls)
+    assert not any(c.touch_buttons.corners for c in touch4.controls)
 
 
 def test_left_and_right_touch_players_keep_the_corners(touch2):
@@ -2645,7 +2675,9 @@ def test_top_and_bottom_status_read_from_their_seat(kv_game):
 @pytest.mark.parametrize('scale', [0.5, 1.0, 4.0])
 def test_keyboard_player_with_a_top_seat_sits_in_a_corner(kv_game,
                                                           window_15x10,
-                                                          scale):
+                                                          scale,
+                                                          monkeypatch):
+    monkeypatch.setattr(main, 'four_seat_screen', lambda *a: True)
     game = kv_game
     game.touch_settings.scale = scale
     game.game_start(slots=[('touch', 'top'), ('touch', 'left'), ('keys', 0),
@@ -2667,7 +2699,9 @@ def test_keyboard_player_with_a_top_seat_sits_in_a_corner(kv_game,
 
 
 def test_keyboard_and_gamepad_corners_follow_player_order(kv_game,
-                                                         window_15x10):
+                                                         window_15x10,
+                                                         monkeypatch):
+    monkeypatch.setattr(main, 'four_seat_screen', lambda *a: True)
     game = kv_game
     game.game_start(slots=[('keys', 0), ('touch', 'bottom'), ('pad', 0),
                            ('keys', 1)])

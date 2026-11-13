@@ -969,6 +969,30 @@ def test_watch_tap_to_join_at_the_left_seat(env):
     assert not watcher.prompt.visible
 
 
+def test_client_touch_player_out_of_lives_loses_pause(env):
+    """A client's touch player who loses the last life keeps the lives and
+    points on that client, but no Pause button."""
+    host, client = started(env)
+    watcher = env.client(host)
+    watcher.has_touch = True
+    env.frames(host)
+    watcher.prompt.strips['left'].dispatch('on_press')
+    env.pump()
+    env.frames(host)
+    status = next(s for s in watcher.statuses if s.column == 2)
+    assert status.show_menu
+    ship = host.controls[2].spaceship
+    ship.lives = 0
+    host.lose_spaceship(ship)
+    env.pump()
+    env.frames(host)
+    assert status in watcher.statuses        # lives and points stay
+    assert not status.show_menu
+    assert watcher.controls[2] is None
+    watcher._show_touch_controls()           # e.g. after a pause
+    assert not status.show_menu
+
+
 def test_net_leave_client_leaves_others_play_on(env):
     host, client = started(env)
     third = env.client(host)
@@ -1256,3 +1280,36 @@ def test_shared_leaderboard_single_player_sends_nothing(env, monkeypatch):
     assert game.net is None and sent == []
     assert game.leaderboard.entries[0]['name'] == 'Solo'
 
+
+
+# ---- the field follows the windows (large-screen-support) ------------------------
+
+def test_field_follows_the_host_window(env):
+    host, client = started(env)
+    old = Window.size
+    try:
+        Window.size = (600, 900)              # the host's window turns
+        env.frames(host)
+        view = client.field_view
+        assert view.field == (600, 900)
+        # host and client share this test's window: the field fits exactly
+        assert view.scale == pytest.approx(1)
+        assert view.offset == pytest.approx((0, 0))
+    finally:
+        Window.size = old
+
+
+def test_field_follows_the_client_window(env):
+    host, client = started(env)
+    old = Window.size
+    try:
+        view = client.field_view
+        view.set_field((1280, 800))           # a wide host
+        Window.size = (800, 1280)             # the client's window turns
+        assert view.scale == pytest.approx(800 / 1280)
+        assert view.offset == pytest.approx((0, (1280 - 500) / 2))
+        Window.size = (1280, 800)
+        assert view.scale == pytest.approx(1)
+        assert view.offset == pytest.approx((0, 0))
+    finally:
+        Window.size = old

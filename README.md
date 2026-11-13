@@ -25,7 +25,9 @@ This game is a remake of Rice Rocks, the final project of the [An Introduction t
 | Fire | Space or Enter | A / X | FIRE button |
 | Pause | Escape / Back | Back / Start | Pause button |
 
-The Android TV remote's D-pad works as the arrow keys and its centre button fires. Touch controls (a joystick bottom-left and FIRE bottom-right) appear when the screen is touched and hide when a keyboard or gamepad is used.
+The Android TV remote's D-pad works as the arrow keys and its centre button fires. Touch controls (a joystick bottom-left, FIRE bottom-right and **Pause** between them) appear when the screen is touched and hide when a keyboard or gamepad is used.
+
+The game can be played in portrait or landscape on every device and turns with it; the system's rotation lock keeps it as it is. Turning the device during a touch game moves the players' controls to other edges, so turn the rotation lock on before playing around a tablet.
 
 ### Settings
 
@@ -48,7 +50,7 @@ Each player takes a slot with the device they play with, picks a cabin colour an
 | Gamepad | A / X | stick or D-pad left / right | Back / Start |
 | Touch | *Tap to join by touch* strip at your edge of the screen | `<` / `>` | *Leave* |
 
-The game starts when at least two players have joined and all are ready. Up to two players share the keyboard, and up to two play by touch on a phone or four on a tablet (one at each edge); further players use gamepads. Touch players get their joystick and FIRE at their own edge, turned toward them. Escape, or Back / Start on a pad that has not joined, returns to the menu.
+The game starts when at least two players have joined and all are ready. Up to two players share the keyboard, and up to two play by touch on a phone or four on a tablet (one at each edge); further players use gamepads. On a phone the two touch players sit at its short ends: left and right in landscape, top and bottom in portrait. Touch players get their joystick, FIRE and **Pause** at their own edge, turned toward them. Escape, or Back / Start on a pad that has not joined, returns to the menu.
 
 ### Network game
 
@@ -69,7 +71,7 @@ Nothing is sent to the internet (see [PRIVACY.md](PRIVACY.md)). On a desktop, al
 
 ### Pause, results and leaderboard
 
-Escape / Back, Back / Start on a gamepad, or a touch player's **Pause** button freezes the game; the pause screen has **Continue** and **Main menu**.
+Escape / Back, Back / Start on a gamepad, or a touch player's **Pause** button (between their joystick and FIRE) freezes the game; the pause screen has **Continue** and **Main menu**.
 
 When the last ship is lost, the results show each player's time survived and points. **Save to leaderboard** stores the top player with a nickname (up to 12 characters). **Play again** restarts with the same players, devices and colours. **Leaderboard** in the main menu lists the best ten by points (the time only breaks ties).
 
@@ -220,6 +222,20 @@ This renders the store screenshots from the game itself into `store/play/`: five
 - Linux desktop: menus and buttons follow the desktop's display scaling (they were half size at 200%)
 
 - Android: network permissions (`INTERNET`, `ACCESS_NETWORK_STATE`, `ACCESS_WIFI_STATE`, `CHANGE_WIFI_MULTICAST_STATE`) for the network game
+
+### 0.6.1
+
+- the game turns with the device on phones, tablets, foldables and Chromebooks, in portrait and landscape, with no orientation or resizing restriction (Google Play asked for this for large screens)
+
+- every screen fits a phone held upright and follows the window when it turns or is resized; the Multiplayer join screen shows its slots two by two on a narrow screen
+
+- on a phone held upright the two touch players sit at the top and bottom
+
+- keyboard and gamepad players' lives and points fit a phone held upright: two per row at the top, or beside the left and right edges when touch players sit at the top and bottom
+
+- the Pause button sits between the touch player's joystick and FIRE, on their bottom line, in single player and multiplayer
+
+- Android: the nickname, address and device-name boxes stay above the on-screen keyboard while typing
 
 ## Copyright and License
 

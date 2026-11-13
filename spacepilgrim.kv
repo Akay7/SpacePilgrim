@@ -73,14 +73,15 @@
         canvas.after:
             PopMatrix
         color: root.color
-        text: ("Lives {}  Points {}" if root.side == 'row' else "Lives {}\nPoints {}" if root.side == 'corner' else "Lives {:<5} Points {}").format(root.spaceship.lives, root.spaceship.points)
-        font_size: "17dp" if root.side in ('row', 'corner') else "23dp"
+        text: ("Lives {}\nPoints {}" if root.two_lines(root.side, Window.width) else "Lives {}  Points {}" if root.side == 'row' else "Lives {:<5} Points {}").format(root.spaceship.lives, root.spaceship.points)
+        font_size: "17dp" if root.side in ('row', 'corner', 'flank') else "23dp"
         font_name: 'data/fonts/RobotoMono-Regular.ttf'
 
     PauseButton:
         id: pause
-        # under the lives and points as the player reads them, see
-        # SpaceshipStatus.pause_center
+        # between the player's joystick and FIRE, on their outer line; next
+        # to the lives and points when there is no room (SpaceshipStatus.
+        # place_pause, pause_center)
         text: "Pause"
         font_size: "12dp"
         background_normal: ''
@@ -90,7 +91,7 @@
         size: metrics.dp(44), metrics.dp(44)
         opacity: 1 if root.show_menu else 0
         disabled: not root.show_menu
-        center: root.pause_center(text_label.center, text_label.texture_size, root.side)
+        center: root.pause_spot or root.pause_center(text_label.center, text_label.texture_size, root.side)
         on_press: root.parent.pause()
         canvas.before:
             PushMatrix
@@ -209,7 +210,7 @@
     orientation: "vertical"
     spacing: metrics.dp(8)
     size_hint: None, None
-    size: metrics.dp(380), min(metrics.dp(420), Window.height - metrics.dp(10))
+    size: min(metrics.dp(380), Window.width - metrics.dp(10)), min(metrics.dp(420), Window.height - metrics.dp(10))
     pos: (Vector(*Window.size) - Vector(*self.size)) / 2
 
     Label:
@@ -323,7 +324,7 @@
     orientation: "vertical"
     spacing: metrics.dp(6)
     size_hint: None, None
-    size: metrics.dp(380), min(metrics.dp(400), Window.height - metrics.dp(10))
+    size: min(metrics.dp(380), Window.width - metrics.dp(10)), min(metrics.dp(400), Window.height - metrics.dp(10))
     pos: (Vector(*Window.size) - Vector(*self.size)) / 2
 
     Label:
