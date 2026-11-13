@@ -11,6 +11,8 @@ os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 # A hidden window: creating a visible one blocks while a Wayland session is
 # locked, and nothing needs to be seen.
 os.environ.setdefault("KCFG_GRAPHICS_WINDOW_STATE", "hidden")
+# Sizes in tests are at density 1, whatever the scale of this desktop.
+os.environ.setdefault("KIVY_METRICS_DENSITY", "1")
 
 ROOT = Path(__file__).resolve().parent.parent
 os.chdir(ROOT)  # main.py loads assets using paths relative to the project

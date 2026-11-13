@@ -29,6 +29,60 @@ if platform == 'android':
     import kivy.clock  # noqa: F401
     del sys.modules['ctypes.util']
 
+
+def x_resources():
+    """The X server's resource database as text (what `xrdb -query`
+    prints), read through libX11; '' when there is no X display."""
+    import ctypes
+    x11 = ctypes.CDLL('libX11.so.6')
+    x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+    x11.XOpenDisplay.restype = ctypes.c_void_p
+    x11.XResourceManagerString.argtypes = [ctypes.c_void_p]
+    x11.XResourceManagerString.restype = ctypes.c_char_p   # copied to bytes
+    x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+    display = x11.XOpenDisplay(None)
+    if not display:
+        return ''
+    try:
+        text = x11.XResourceManagerString(display)
+    finally:
+        x11.XCloseDisplay(display)
+    return text.decode('utf-8', 'replace') if text else ''
+
+
+def desktop_scale(query=x_resources):
+    """The desktop's scale on Linux: Xft.dpi / 96. Kivy draws through X11
+    (XWayland on a Wayland desktop), where KDE and GNOME leave the scaling
+    to the app and only say it in Xft.dpi; Kivy itself assumes 96 dpi, so
+    on a 200% screen every text and button would be half its size."""
+    try:
+        lines = query().splitlines()
+    except (OSError, AttributeError):    # no libX11, or a missing function
+        return 1.0
+    for line in lines:
+        if line.startswith('Xft.dpi:'):
+            try:
+                dpi = float(line.split(':', 1)[1])
+            except ValueError:
+                return 1.0
+            return round(dpi / 96, 2) if 96 <= dpi <= 480 else 1.0
+    return 1.0
+
+
+# Before the first kivy.metrics or window import: the density is read once.
+# KIVY_METRICS_DENSITY set by hand wins.
+if (platform == 'linux' and os.environ.get('DISPLAY')
+        and 'KIVY_METRICS_DENSITY' not in os.environ):
+    _scale = desktop_scale()
+    if _scale != 1.0:
+        from kivy.config import Config as _Config
+        os.environ['KIVY_METRICS_DENSITY'] = '{:g}'.format(_scale)
+        os.environ.setdefault('KIVY_DPI', '{:g}'.format(96 * _scale))
+        # the window keeps its size on screen too
+        for _key in ('width', 'height'):
+            _Config.set('graphics', _key, str(round(
+                _Config.getint('graphics', _key) * _scale)))
+
 from kivy.animation import Animation
 from kivy.core.window import Window, Keyboard
 from kivy.core.audio import SoundLoader

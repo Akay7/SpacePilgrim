@@ -3684,3 +3684,31 @@ def test_stick_still_navigates_menus(kv_game):
     game._on_joy_axis(None, 0, 1, -32767)               # up
     game._on_joy_axis(None, 0, 1, 0)
     assert game.menu.selected == 0
+
+
+# ---- desktop scale --------------------------------------------------------------
+
+@pytest.mark.parametrize('output, scale', [
+    ('Xft.dpi:\t192\nXft.antialias:\t1\n', 2.0),
+    ('Xft.dpi:\t144\n', 1.5),
+    ('Xft.dpi:\t96\n', 1.0),
+    ('Xcursor.size:\t24\n', 1.0),           # no Xft.dpi
+    ('Xft.dpi:\tlots\n', 1.0),
+    ('Xft.dpi:\t9600\n', 1.0),              # nonsense
+])
+def test_desktop_scale_from_xft_dpi(output, scale):
+    assert main.desktop_scale(lambda: output) == scale
+
+
+def test_desktop_scale_without_libx11():
+    def missing():
+        raise OSError('libX11.so.6: cannot open shared object file')
+    assert main.desktop_scale(missing) == 1.0
+
+
+def test_x_resources_without_a_display(monkeypatch):
+    monkeypatch.setenv('DISPLAY', ':4242')     # no such X server
+    try:
+        assert main.x_resources() == ''
+    except OSError:
+        pytest.skip('no libX11 here')

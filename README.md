@@ -12,7 +12,7 @@ This game is a remake of Rice Rocks, the final project of the [An Introduction t
 
 - Install it from [Google Play](https://play.google.com/store/apps/details?id=pro.crazyrussian.games.spacepilgrim) on an Android phone, tablet or Android TV.
 
-- Run it from the source code: install Python 3 and Kivy ([installation instructions](https://kivy.org/doc/stable/gettingstarted/installation.html)), then run `python main.py`.
+- Run it from the source code: install Python 3 and Kivy ([installation instructions](https://kivy.org/doc/stable/gettingstarted/installation.html)), then run `python main.py`. On Linux, menus and buttons follow the display scaling set in your desktop settings (for example 200% on a high-resolution laptop screen). To turn that off, start it with `KIVY_METRICS_DENSITY=1 python main.py`.
 
 ## How to play
 
@@ -216,6 +216,8 @@ This renders the store screenshots from the game itself into `store/play/`: five
 - shared leaderboard: connected devices exchange their leaderboards and keep the combined top ten; after a network game only the top player's device saves the score, into every device's leaderboard
 
 - the scrolling debris keeps its own proportions instead of stretching on wide and tall screens
+
+- Linux desktop: menus and buttons follow the desktop's display scaling (they were half size at 200%)
 
 - Android: network permissions (`INTERNET`, `ACCESS_NETWORK_STATE`, `ACCESS_WIFI_STATE`, `CHANGE_WIFI_MULTICAST_STATE`) for the network game
 
