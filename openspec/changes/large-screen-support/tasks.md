@@ -53,7 +53,7 @@
 
 ## Workflow follow-up
 
-- Bump `__version__` (to 0.6.1 or with the next feature release) when releasing.
+- Release together with the network game as 0.6.0 (`__version__` is already 0.6.0; the README history lists both under 0.6.0).
 - After the release, check that the Play Console's large-screen notice is gone.
 - Regenerate the store screenshots (`tools/play_listing.py`) if the join screen's landscape look changed.
 - Archive the change after review, so that `screen-adaptation` moves to `openspec/specs/` and the `local-multiplayer` seat requirements are updated.

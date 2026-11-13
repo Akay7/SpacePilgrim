@@ -217,14 +217,6 @@ This renders the store screenshots from the game itself into `store/play/`: five
 
 - shared leaderboard: connected devices exchange their leaderboards and keep the combined top ten; after a network game only the top player's device saves the score, into every device's leaderboard
 
-- the scrolling debris keeps its own proportions instead of stretching on wide and tall screens
-
-- Linux desktop: menus and buttons follow the desktop's display scaling (they were half size at 200%)
-
-- Android: network permissions (`INTERNET`, `ACCESS_NETWORK_STATE`, `ACCESS_WIFI_STATE`, `CHANGE_WIFI_MULTICAST_STATE`) for the network game
-
-### 0.6.1
-
 - the game turns with the device on phones, tablets, foldables and Chromebooks, in portrait and landscape, with no orientation or resizing restriction (Google Play asked for this for large screens)
 
 - every screen fits a phone held upright and follows the window when it turns or is resized; the Multiplayer join screen shows its slots two by two on a narrow screen
@@ -235,7 +227,13 @@ This renders the store screenshots from the game itself into `store/play/`: five
 
 - the Pause button sits between the touch player's joystick and FIRE, on their bottom line, in single player and multiplayer
 
+- the scrolling debris keeps its own proportions instead of stretching on wide and tall screens
+
+- Linux desktop: menus and buttons follow the desktop's display scaling (they were half size at 200%)
+
 - Android: the nickname, address and device-name boxes stay above the on-screen keyboard while typing
+
+- Android: network permissions (`INTERNET`, `ACCESS_NETWORK_STATE`, `ACCESS_WIFI_STATE`, `CHANGE_WIFI_MULTICAST_STATE`) for the network game
 
 ## Copyright and License
 
